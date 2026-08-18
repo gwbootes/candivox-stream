@@ -293,6 +293,7 @@ squeezed into about fifteen pixels. That is what the plate says.
 | `horizon` | `0` | Tilts the grid, in degrees. Use it to correct the match |
 | `flush` | `0` | `1` raises the camera until the desk's front edge is exactly on the bottom of the frame, hiding the lip |
 | `camy` | `0.1825` | Camera height above the desk top, by hand. `flush` overrides it |
+| `edit` | `0` | `1` opens the placement editor. See Step 9. Turns `plate` and `grid` on by itself |
 
 ### Hiding the desk lip
 
@@ -309,6 +310,84 @@ grows from 209 pixels to 251, and the back edge barely moves, from `823` to
 
 This no longer matches the plate picture, on purpose. It is a different shot.
 When you rebuild the desk in 3D, build it to this camera.
+
+---
+
+## Step 9. Putting things on the desk
+
+This is the part where you actually decorate.
+
+Start **`stage.bat`**, then open this in a normal browser window:
+
+```
+http://localhost:8777/index.html?edit=1
+```
+
+It has to be `localhost`. The GitHub page can show you the editor, but there is
+nothing on the other end to save the file.
+
+You will see every model standing in a row on the desk, turning. A turning model
+means "not put down yet." Click one and it stops turning. That is you picking it up.
+
+### The controls
+
+| You do | It does |
+|---|---|
+| Click a model | Picks it up |
+| Drag it | Slides it around the desk top |
+| Hold Shift while dragging | Snaps to the grid squares |
+| Scroll wheel | Bigger and smaller |
+| `[` and `]` | Bigger and smaller, in steps |
+| `Q` and `E` | Turns it |
+| Arrow keys | Nudges it a little |
+| `PgUp` and `PgDn` | Floats it above the desk |
+| `F` | Drops it back onto the desk |
+| `V` | Hides it from the live page |
+| `R` | Starts that one over |
+| `Tab` | Next model |
+| `Esc` | Put it down |
+| `S` | **Save** |
+
+Hold **Shift** with any key to move ten times as far. Hold **Alt** to move a tenth
+as far, for the fiddly last bit.
+
+The panel in the corner always shows the numbers for whatever you are holding.
+
+### About hiding
+
+You have fifteen models and the desk is not that big. `V` marks one as hidden.
+It still shows in the editor, so you can always click it and bring it back. It
+just does not draw on the live page.
+
+### Saving
+
+Press **`S`**. That writes `layout.json` next to the page.
+
+The old one is kept as `layout.json.bak`. If you save a mess, close the page,
+rename the `.bak` back over it, and reload.
+
+Every page in plate mode reads that file from then on. So this is the live one,
+with everything sitting where you left it:
+
+```
+http://localhost:8777/index.html?plate=1&flush=1&gallery=1
+```
+
+No `edit=1`, no grid, no panel. Just the things on the desk.
+
+Push `layout.json` to GitHub and the web version has your layout too.
+
+### Two things worth knowing
+
+**A model always stands on the desk.** Make it bigger and it grows upward
+instead of sinking through the wood. That is why the height is worked out for
+you rather than being something you set. `PgUp` is there for when you want
+something floating on purpose.
+
+**Placed things do not spin.** Once you put a model down, the turn you gave it
+is the turn it keeps. A television slowly revolving on a desk looks wrong.
+Anything you have not touched yet keeps turning, which is how you spot what is
+left to do.
 
 ---
 

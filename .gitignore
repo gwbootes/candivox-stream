@@ -1,3 +1,8 @@
 # Local dev leftovers
 __pycache__/
 *.pyc
+
+# The editor's safety copies. layout.json itself IS committed, since the live
+# page reads it, but the rollback copy is yours alone.
+layout.json.bak
+layout.json.tmp

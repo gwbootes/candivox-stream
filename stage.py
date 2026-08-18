@@ -4,8 +4,9 @@ An OBS Browser source never receives mouse movement. It cannot, so no page
 trick gets around it. What a page CAN do is ask something else where to look.
 That is what this does.
 
-    GET  /position   ->  {"x": -1..1, "y": -1..1, "src": "cursor"}
-    POST /position   <-  {"x": -1..1, "y": -1..1}
+    GET  /position     ->  {"x": -1..1, "y": -1..1, "src": "cursor"}
+    POST /position     <-  {"x": -1..1, "y": -1..1}
+    POST /layout.json  <-  the placement editor saving where things stand
 
 The page asks about thirty times a second and leans that way.
 
@@ -102,6 +103,9 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        if self.path.split("?")[0] in ("/layout.json", "/layout"):
+            self._save_layout()
+            return
         if self.path.split("?")[0] != "/position":
             self.send_error(404)
             return
@@ -115,6 +119,36 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"ok": True})
         except (ValueError, TypeError) as exc:
             # A malformed steer must never take the server down mid-stream.
+            self._json({"ok": False, "error": str(exc)}, code=400)
+
+    def _save_layout(self):
+        """Write layout.json for the editor.
+
+        The editor is the only thing that posts here, and it posts the whole
+        file every time. The previous version is kept as layout.json.bak, so a
+        misplaced save is one file rename away from being undone.
+        """
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n)
+            data = json.loads(raw or b"{}")
+            if not isinstance(data.get("models"), dict):
+                raise ValueError('expected {"models": {...}}')
+
+            here = Path(__file__).parent
+            target = here / "layout.json"
+            tmp = here / "layout.json.tmp"
+
+            # Write beside it and rename, so a crash mid-write cannot leave a
+            # half-finished file where a good one used to be.
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            if target.exists():
+                target.replace(here / "layout.json.bak")
+            tmp.replace(target)
+
+            print(f"saved layout.json ({len(data['models'])} models placed)")
+            self._json({"ok": True, "count": len(data["models"])})
+        except (ValueError, TypeError, OSError) as exc:
             self._json({"ok": False, "error": str(exc)}, code=400)
 
     def log_message(self, *_args):

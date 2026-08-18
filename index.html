@@ -23,6 +23,20 @@
     color: #ffd7d7; background: rgba(40, 0, 0, .82);
     padding: 2rem; text-align: center; white-space: pre-wrap;
   }
+
+  /* The editor's readout. Only built when edit=1, so it can never appear on a
+     live source by accident. */
+  #hud {
+    position: fixed; top: 12px; left: 12px; max-width: 340px;
+    font: 12px/1.55 ui-monospace, Consolas, monospace;
+    color: #d8f6ee; background: rgba(10, 18, 24, .84);
+    border: 1px solid rgba(0, 255, 200, .35); border-radius: 6px;
+    padding: 10px 12px; white-space: pre-wrap; pointer-events: none;
+    text-shadow: 0 1px 2px #000;
+  }
+  #hud b   { color: #ff3ea5; font-weight: 600; }
+  #hud i   { color: #7f8fa0; font-style: normal; }
+  #hud .ok { color: #7dffb0; }
 </style>
 </head>
 <body>
@@ -64,6 +78,8 @@ import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
 //   follow    1 takes the steer from stage.py; the only way this works in OBS
 //   sway      degrees of automatic lean, driven by a clock; needs no input
 //   ease      how fast the lean catches up; lower is floatier
+//
+//   edit   1 opens the placement editor: click, drag, scale, save
 // ---------------------------------------------------------------------------
 const q     = new URLSearchParams(location.search);
 const num   = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) ? v : d; };
@@ -95,7 +111,10 @@ const SWAYING  = SWAY > 0 && !DRAG && !PARALLAX;
 // Whichever mode is live owns the swing, measured in degrees either way.
 const SWING    = PARALLAX ? PARA : (SWAYING ? SWAY : 0);
 
-if (!DRAG) document.documentElement.classList.add('hide-cursor');
+// The placement editor. Everything it does happens on the desk surface, so it
+// turns plate mode on for itself: placing a model against no reference at all
+// would just be moving it around in the dark.
+const EDIT = q.get('edit') === '1';
 
 // ---------------------------------------------------------------------------
 // PLATE CALIBRATION - bedroom-desk-v1.png, 1920x1080
@@ -124,11 +143,16 @@ const PLATE = {
   image:   'plates/bedroom-desk-v1.png',
 };
 
-const PLATEMODE = q.get('plate') === '1';
-const GRID      = q.get('grid') === '1';
+const PLATEMODE = q.get('plate') === '1' || EDIT;
+// The grid is what makes depth readable while dragging, so the editor brings it
+// along unless it is turned off by hand with grid=0.
+const GRID      = q.get('grid') === '1' || (EDIT && q.get('grid') !== '0');
 const SHOWBG    = q.get('bg') === '1';
 const CELL      = num('cell', 1);          // grid square size in obj units
 const HORIZON   = num('horizon', 0);       // nudge, in degrees of pitch
+
+// Seeing the pointer is the whole job in both of these.
+if (!DRAG && !EDIT) document.documentElement.classList.add('hide-cursor');
 
 const fail = (msg) => {
   const el = document.getElementById('err');
@@ -316,7 +340,7 @@ function loadOne(path) {
 
 // Models arrive at wildly different voxel scales and none of them sit on the
 // origin, so every one gets measured and re-centred rather than hand-placed.
-function prepare(object) {
+function prepare(object, path) {
   crispenTextures(object);
   const box    = new THREE.Box3().setFromObject(object);
   const size   = box.getSize(new THREE.Vector3());
@@ -326,7 +350,40 @@ function prepare(object) {
   const pivot = new THREE.Group();
   pivot.add(object);
   pivot.rotation.y = THREE.MathUtils.degToRad(YAW);
-  return { pivot, size };
+  // Every mesh under here answers back to its entry, so a raycast hit anywhere
+  // on a model resolves to the thing the editor should select.
+  pivot.traverse(n => { n.userData.path = path; });
+  return { path, pivot, size, tf: null };
+}
+
+// ---------------------------------------------------------------------------
+// PLACEMENT
+//
+// A placed model is described by five numbers in layout.json, keyed by path:
+//
+//   x, z    where it stands on the desk, in obj units, 0,0 under the camera
+//   ry      how far it is turned, degrees
+//   s       scale multiplier, 1 being the size MagicaVoxel exported
+//   lift    height above the desk top; 0 rests on the wood
+//
+// Height is derived rather than stored. A model always sits on the surface, so
+// scaling it up cannot sink it through the table.
+// ---------------------------------------------------------------------------
+const placed = [];        // every loaded entry, in load order
+let   layoutData = {};    // path -> transform, as read from and written to disk
+
+const defaultTf = () => ({ x: 0, z: -(PLATE.nearZ + PLATE.depth / 2), ry: YAW, s: 1, lift: 0 });
+
+// Push an entry's numbers onto its pivot. The single place any model moves.
+function applyTf(e) {
+  if (!e.tf) return;
+  const t = e.tf;
+  e.pivot.scale.setScalar(t.s);
+  e.pivot.rotation.y = THREE.MathUtils.degToRad(t.ry);
+  e.pivot.position.set(t.x, (e.size.y * t.s) / 2 + t.lift, t.z);
+  // Hiding is for the live page. Inside the editor a hidden model stays on
+  // screen, or there would be no way to click it and bring it back.
+  e.pivot.visible = EDIT || !t.hidden;
 }
 
 // Lay the set out in a single row along X. Each model keeps its own pivot so
@@ -352,20 +409,33 @@ function layout(entries) {
   for (let i = 0; i < entries.length; i++) {
     x += widths[i] / 2;
     entries[i].pivot.position.x = x;
+    entries[i].rowX = x;
     x += widths[i] / 2 + GAP * widths[0];
     scene.add(entries[i].pivot);
-    pivots.push(entries[i].pivot);
+    placed.push(entries[i]);
   }
 
   // Plate mode has a camera it must not move, so the models come to the camera
-  // instead. They get stood on the desk surface rather than centred on it.
+  // instead. Anything with a saved place takes it; anything without stays in the
+  // row, standing on the desk, waiting to be put somewhere.
   if (PLATEMODE) {
     for (const e of entries) {
-      e.pivot.position.y = e.size.y / 2;
-      e.pivot.position.z = -(PLATE.nearZ + PLATE.depth / 2);
+      const saved = layoutData[e.path];
+      if (saved) {
+        e.tf = { ...defaultTf(), ...saved };
+        applyTf(e);
+      } else {
+        e.pivot.position.y = e.size.y / 2;
+        e.pivot.position.z = -(PLATE.nearZ + PLATE.depth / 2);
+        // Unplaced models keep turning. It reads as "not dealt with yet"
+        // against the stillness of everything already set down.
+        pivots.push(e.pivot);
+      }
     }
     return;
   }
+
+  for (const e of entries) pivots.push(e.pivot);
 
   fitW      = total || 1;
   fitH      = Math.max(...entries.map(e => e.size.y)) || 1;
@@ -420,6 +490,203 @@ function placeCamera() {
   camera.lookAt(0, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// THE EDITOR
+//
+// Click a model to pick it up, drag it around the desk, scroll to resize, turn
+// it with Q and E, then press S to write layout.json. Nothing here loads unless
+// edit=1, so a live OBS source carries none of it.
+// ---------------------------------------------------------------------------
+function startEditor() {
+  const ray    = new THREE.Raycaster();
+  const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const hit    = new THREE.Vector3();
+  const hud    = document.createElement('div');
+  hud.id = 'hud';
+  document.body.appendChild(hud);
+
+  let sel = null, box = null, dragging = false, dragDX = 0, dragDZ = 0, note = '';
+
+  // Where the pointer meets the desk surface, in world units. Returns false
+  // when the ray goes above the horizon and never touches the plane.
+  const onDesk = (ev) => {
+    ray.setFromCamera(new THREE.Vector2(
+      (ev.clientX / innerWidth) * 2 - 1,
+      -(ev.clientY / innerHeight) * 2 + 1
+    ), camera);
+    return ray.ray.intersectPlane(ground, hit) !== null;
+  };
+
+  const pick = (ev) => {
+    ray.setFromCamera(new THREE.Vector2(
+      (ev.clientX / innerWidth) * 2 - 1,
+      -(ev.clientY / innerHeight) * 2 + 1
+    ), camera);
+    for (const h of ray.intersectObjects(placed.map(e => e.pivot), true)) {
+      const e = placed.find(p => p.path === h.object.userData.path);
+      if (e) return e;
+    }
+    return null;
+  };
+
+  // Picking a model up settles it. It stops spinning and gains real numbers,
+  // taken from wherever it happened to be sitting at that moment.
+  function select(e) {
+    if (box) { scene.remove(box); box.geometry.dispose(); box = null; }
+    sel = e;
+    if (!sel) { draw(); return; }
+
+    if (!sel.tf) {
+      sel.tf = {
+        x: sel.pivot.position.x,
+        z: sel.pivot.position.z,
+        ry: (THREE.MathUtils.radToDeg(sel.pivot.rotation.y) % 360 + 360) % 360,
+        s: sel.pivot.scale.x,
+        lift: 0,
+        hidden: false,
+      };
+      const i = pivots.indexOf(sel.pivot);
+      if (i >= 0) pivots.splice(i, 1);
+      applyTf(sel);
+    }
+
+    box = new THREE.BoxHelper(sel.pivot, 0xff3ea5);
+    scene.add(box);
+    draw();
+  }
+
+  const commit = () => { applyTf(sel); if (box) box.setFromObject(sel.pivot); draw(); };
+  const step   = (ev, base) => base * (ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1);
+
+  renderer.domElement.addEventListener('pointerdown', (ev) => {
+    const e = pick(ev);
+    select(e);
+    if (e && onDesk(ev)) {
+      // Grab it where it was clicked, not by its middle, so it does not jump
+      // out from under the cursor the instant it is touched.
+      dragging = true;
+      dragDX = e.tf.x - hit.x;
+      dragDZ = e.tf.z - hit.z;
+      renderer.domElement.setPointerCapture(ev.pointerId);
+    }
+  });
+
+  renderer.domElement.addEventListener('pointermove', (ev) => {
+    if (!dragging || !sel || !onDesk(ev)) return;
+    sel.tf.x = hit.x + dragDX;
+    sel.tf.z = hit.z + dragDZ;
+    if (ev.shiftKey) {
+      sel.tf.x = Math.round(sel.tf.x / CELL) * CELL;
+      sel.tf.z = Math.round(sel.tf.z / CELL) * CELL;
+    }
+    commit();
+  });
+
+  const stop = () => { dragging = false; };
+  renderer.domElement.addEventListener('pointerup', stop);
+  renderer.domElement.addEventListener('pointercancel', stop);
+
+  renderer.domElement.addEventListener('wheel', (ev) => {
+    if (!sel) return;
+    ev.preventDefault();
+    // Multiplying rather than adding keeps every notch the same visual amount
+    // whether the model is tiny or enormous.
+    sel.tf.s = THREE.MathUtils.clamp(sel.tf.s * Math.exp(-ev.deltaY * 0.0012), 0.02, 50);
+    commit();
+  }, { passive: false });
+
+  addEventListener('keydown', (ev) => {
+    const k = ev.key;
+
+    if (k === 'Tab') {
+      ev.preventDefault();
+      const i = sel ? placed.indexOf(sel) : -1;
+      select(placed[(i + 1) % placed.length]);
+      return;
+    }
+    if (k === 'Escape') { select(null); return; }
+    if (k === 's' || k === 'S') { ev.preventDefault(); save(); return; }
+    if (!sel) return;
+
+    const t = sel.tf;
+    switch (k) {
+      case 'ArrowLeft':  t.x -= step(ev, 0.1); break;
+      case 'ArrowRight': t.x += step(ev, 0.1); break;
+      case 'ArrowUp':    t.z -= step(ev, 0.1); break;
+      case 'ArrowDown':  t.z += step(ev, 0.1); break;
+      case 'q': case 'Q': t.ry = (t.ry - step(ev, 5) + 360) % 360; break;
+      case 'e': case 'E': t.ry = (t.ry + step(ev, 5)) % 360; break;
+      case '[': t.s = Math.max(0.02, t.s * (1 - step(ev, 0.02))); break;
+      case ']': t.s = Math.min(50,   t.s * (1 + step(ev, 0.02))); break;
+      case 'PageUp':   t.lift += step(ev, 0.05); break;
+      case 'PageDown': t.lift -= step(ev, 0.05); break;
+      case 'f': case 'F': t.lift = 0; break;
+      case 'v': case 'V': t.hidden = !t.hidden; break;
+      case 'r': case 'R': sel.tf = { ...defaultTf(), hidden: false }; break;
+      default: return;
+    }
+    ev.preventDefault();
+    commit();
+  });
+
+  async function save() {
+    const models = {};
+    for (const e of placed) {
+      if (!e.tf) continue;
+      models[e.path] = {
+        x:    +e.tf.x.toFixed(4),
+        z:    +e.tf.z.toFixed(4),
+        ry:   +e.tf.ry.toFixed(2),
+        s:    +e.tf.s.toFixed(4),
+        lift: +e.tf.lift.toFixed(4),
+        hidden: !!e.tf.hidden,
+      };
+    }
+    const body = JSON.stringify({ models }, null, 2);
+
+    try {
+      const res = await fetch('layout.json', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      note = `saved layout.json  (${Object.keys(models).length} placed)`;
+    } catch (err) {
+      // Served by anything other than stage.py, so there is nothing listening
+      // to write the file. Hand the text over instead of losing the work.
+      try { await navigator.clipboard.writeText(body); } catch (e2) { /* no permission */ }
+      console.log(body);
+      note = 'no server to save to. JSON copied to clipboard and logged to the console.';
+    }
+    draw();
+  }
+
+  function draw() {
+    const n = placed.filter(e => e.tf).length;
+    if (!sel) {
+      hud.innerHTML =
+        `<b>CANDIVOX PLACEMENT</b>\n${n}/${placed.length} placed\n\n` +
+        `<i>click a model, or press Tab to step through them</i>` +
+        (note ? `\n\n<span class="ok">${note}</span>` : '');
+      return;
+    }
+    const t = sel.tf;
+    hud.innerHTML =
+      `<b>${sel.path.replace(/^models\//, '')}</b>${t.hidden ? '  <i>(hidden)</i>' : ''}\n` +
+      `x ${t.x.toFixed(2)}   z ${t.z.toFixed(2)}   turn ${t.ry.toFixed(0)}°\n` +
+      `scale ${t.s.toFixed(3)}   lift ${t.lift.toFixed(2)}\n\n` +
+      `<i>drag    move on the desk (hold Shift to snap)\n` +
+      `wheel   resize        [ ]   resize by steps\n` +
+      `Q E     turn          arrows  nudge\n` +
+      `PgUp/Dn lift          F     drop back to the desk\n` +
+      `V       hide from the live page\n` +
+      `R       start this one over    Tab  next\n` +
+      `S       save layout.json</i>` +
+      (note ? `\n\n<span class="ok">${note}</span>` : '');
+  }
+
+  draw();
+}
+
 async function boot() {
   let paths = [];
 
@@ -427,6 +694,15 @@ async function boot() {
     usePlateCamera();
     if (SHOWBG) showPlate();
     if (GRID)   buildGrid();
+
+    // Saved placements. A missing file is the normal state the first time, so
+    // it must not read as an error — it just means nothing has been put down.
+    try {
+      const res = await fetch('layout.json', { cache: 'no-store' });
+      if (res.ok) layoutData = (await res.json()).models || {};
+    } catch (e) {
+      // No layout yet, or served from somewhere that has none. Start empty.
+    }
   }
 
   if (q.get('gallery') === '1') {
@@ -457,12 +733,13 @@ async function boot() {
   const results = await Promise.allSettled(paths.map(loadOne));
   const good = [], bad = [];
   results.forEach((r, i) => {
-    if (r.status === 'fulfilled') good.push(prepare(r.value));
+    if (r.status === 'fulfilled') good.push(prepare(r.value, paths[i]));
     else bad.push(`${paths[i]} — ${r.reason?.message || r.reason}`);
   });
 
   if (!good.length) { fail(`Nothing loaded.\n\n${bad.join('\n')}`); return; }
   layout(good);
+  if (EDIT) startEditor();
   if (bad.length) console.warn('[candivox] models that failed to load:\n' + bad.join('\n'));
 }
 
