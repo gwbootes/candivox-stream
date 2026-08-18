@@ -330,18 +330,48 @@ Use the same camera settings you plan to stream with. Above is `flush=1`, so
 drop that if you decide against it. The models end up in the same place either
 way. You just want to be looking through the lens you will actually use.
 
-You will see every model standing in a row on the desk, turning. A turning model
-means "not put down yet." Click one and it stops turning. That is you picking it up.
+You will see the desk, and behind it a block of models slowly turning. **A turning
+model means "not put down yet."** That block is the staging area. Click one and it
+stops turning. That is you picking it up.
+
+Drag it forward onto the desk and it stays where you leave it.
+
+### Keeping things out of the lineup
+
+Not everything in the scene should stand on the desk. Sizing blanks and flat
+logo plates are part of how the art was built, not props.
+
+Open **`models/exclude.txt`** and put a piece of the filename on its own line.
+Anything matching it stays out. Run `make-manifest.bat` and it is gone from the
+lineup.
+
+Nothing is deleted. Take the line back out, rebuild, and the model returns.
+Right now that file holds `screenface`, `Final-Candivox Logos`, and
+`candivox names`, which is 5 files out and 10 models in.
 
 ### The controls
+
+**Moving the view around:**
+
+| You do | It does |
+|---|---|
+| Drag empty space | Turns the view |
+| Right-drag | Slides the view |
+| Scroll wheel | Zooms in and out |
+| `Z` | Flies to the model you have selected |
+| `C` | Shows the real stream shot. Press again to come back |
+
+`C` is the one to remember. The working camera is deliberately nothing like the
+stream camera, so `C` is how you check what people will actually see.
+
+**Moving a model:**
 
 | You do | It does |
 |---|---|
 | Click a model | Picks it up |
 | Drag it | Slides it around the desk top |
 | Hold Shift while dragging | Snaps to the grid squares |
-| Scroll wheel | Bigger and smaller |
-| `[` and `]` | Bigger and smaller, in steps |
+| `[` and `]` | Bigger and smaller |
 | `Q` and `E` | Turns it |
 | Arrow keys | Nudges it a little |
 | `PgUp` and `PgDn` | Floats it above the desk |

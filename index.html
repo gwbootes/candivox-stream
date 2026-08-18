@@ -211,6 +211,47 @@ function usePlateCamera() {
   controls.enabled = false;   // orbiting would throw away the match
 }
 
+// A free camera for working in, which is a different job from the stream
+// camera. The stream camera sits almost level with the wood a foot from the
+// front edge, so most of the desk is edge-on or off screen entirely. You cannot
+// arrange what you cannot see. This one backs off and looks down at the whole
+// surface, and C swaps between the two.
+function useEditorCamera() {
+  // Look at the middle of everything in play, which is the desk plus the pile
+  // still waiting behind it, rather than the middle of the desk alone.
+  const c = new THREE.Vector3(0, 0, -(PLATE.nearZ + (PLATE.depth + stagingReach) / 2));
+  camera.fov = 35;
+  camera.near = 0.01;
+  camera.far  = 10000;
+
+  // Far enough back that the desk's full width fits, measured against the
+  // horizontal angle rather than the vertical one for the same reason refit()
+  // does: fov is vertical, and the desk is a wide thing.
+  // Frame the desk AND whatever is still waiting behind it, so nothing you have
+  // yet to place is sitting off screen where you cannot reach it.
+  const spanX = Math.max(PLATE.width, stagingReach);
+  const spanZ = PLATE.depth + stagingReach;
+
+  const halfV = THREE.MathUtils.degToRad(camera.fov) / 2;
+  const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+  const dist  = Math.max(
+    (spanX / 2) / Math.tan(halfH),
+    (spanZ / 2) / Math.tan(halfV)
+  ) * 1.15;
+
+  const elev = THREE.MathUtils.degToRad(38);
+  camera.position.set(
+    c.x,
+    c.y + Math.sin(elev) * dist,
+    c.z + Math.cos(elev) * dist
+  );
+  camera.updateProjectionMatrix();
+
+  controls.enabled = true;
+  controls.target.copy(c);
+  controls.update();
+}
+
 // Grid drawn on the desk top itself, clipped to the desk's real footprint, so
 // the lines stop where the wood stops instead of floating past the back edge.
 function buildGrid() {
@@ -371,6 +412,7 @@ function prepare(object, path) {
 // ---------------------------------------------------------------------------
 const placed = [];        // every loaded entry, in load order
 let   layoutData = {};    // path -> transform, as read from and written to disk
+let   stagingReach = 0;   // how far the unplaced pile extends, for framing it
 
 const defaultTf = () => ({ x: 0, z: -(PLATE.nearZ + PLATE.depth / 2), ry: YAW, s: 1, lift: 0 });
 
@@ -421,22 +463,40 @@ function layout(entries) {
   }
 
   // Plate mode has a camera it must not move, so the models come to the camera
-  // instead. Anything with a saved place takes it; anything without stays in the
-  // row, standing on the desk, waiting to be put somewhere.
+  // instead. Anything with a saved place takes it. Anything without goes to the
+  // staging area behind the desk.
+  //
+  // The single row above is wrong here. These models are large and there are
+  // fifteen of them, so a row runs about 250 units wide against a desk that is
+  // 25.6 across, which parks most of them off screen in both directions. A
+  // squarish grid keeps the whole set reachable instead.
   if (PLATEMODE) {
+    const waiting = entries.filter(e => !layoutData[e.path]);
+    const cols    = Math.max(1, Math.ceil(Math.sqrt(waiting.length)));
+    const cell    = Math.max(...entries.map(e => Math.hypot(e.size.x, e.size.z))) * 1.15;
+    const zBack   = -(PLATE.nearZ + PLATE.depth);
+    let   n       = 0;
+
     for (const e of entries) {
       const saved = layoutData[e.path];
       if (saved) {
         e.tf = { ...defaultTf(), ...saved };
         applyTf(e);
-      } else {
-        e.pivot.position.y = e.size.y / 2;
-        e.pivot.position.z = -(PLATE.nearZ + PLATE.depth / 2);
-        // Unplaced models keep turning. It reads as "not dealt with yet"
-        // against the stillness of everything already set down.
-        pivots.push(e.pivot);
+        continue;
       }
+      const col = n % cols, row = Math.floor(n / cols);
+      n++;
+      e.pivot.position.set(
+        (col - (cols - 1) / 2) * cell,
+        e.size.y / 2,
+        zBack - cell * (row + 1)
+      );
+      // Unplaced models keep turning. It reads as "not dealt with yet"
+      // against the stillness of everything already set down.
+      pivots.push(e.pivot);
     }
+
+    stagingReach = cols * cell;
     return;
   }
 
@@ -511,6 +571,9 @@ function startEditor() {
   document.body.appendChild(hud);
 
   let sel = null, box = null, dragging = false, dragDX = 0, dragDZ = 0, note = '';
+  let streamView = false;   // false means the free working camera
+
+  useEditorCamera();
 
   // Where the pointer meets the desk surface, in world units. Returns false
   // when the ray goes above the horizon and never touches the plane.
@@ -568,12 +631,15 @@ function startEditor() {
   renderer.domElement.addEventListener('pointerdown', (ev) => {
     const e = pick(ev);
     select(e);
-    if (e && onDesk(ev)) {
+    if (e && ev.button === 0 && onDesk(ev)) {
       // Grab it where it was clicked, not by its middle, so it does not jump
       // out from under the cursor the instant it is touched.
       dragging = true;
       dragDX = e.tf.x - hit.x;
       dragDZ = e.tf.z - hit.z;
+      // Left-drag means orbit everywhere except on top of a model, so the
+      // camera has to let go for the length of the drag.
+      controls.enabled = false;
       renderer.domElement.setPointerCapture(ev.pointerId);
     }
   });
@@ -589,18 +655,9 @@ function startEditor() {
     commit();
   });
 
-  const stop = () => { dragging = false; };
+  const stop = () => { dragging = false; if (!streamView) controls.enabled = true; };
   renderer.domElement.addEventListener('pointerup', stop);
   renderer.domElement.addEventListener('pointercancel', stop);
-
-  renderer.domElement.addEventListener('wheel', (ev) => {
-    if (!sel) return;
-    ev.preventDefault();
-    // Multiplying rather than adding keeps every notch the same visual amount
-    // whether the model is tiny or enormous.
-    sel.tf.s = THREE.MathUtils.clamp(sel.tf.s * Math.exp(-ev.deltaY * 0.0012), 0.02, 50);
-    commit();
-  }, { passive: false });
 
   addEventListener('keydown', (ev) => {
     const k = ev.key;
@@ -613,7 +670,30 @@ function startEditor() {
     }
     if (k === 'Escape') { select(null); return; }
     if (k === 's' || k === 'S') { ev.preventDefault(); save(); return; }
-    if (!sel) return;
+
+    // Check the real shot without leaving the editor. This is the camera OBS
+    // will use, framing and all, so it is the only honest preview.
+    if (k === 'c' || k === 'C') {
+      streamView = !streamView;
+      if (streamView) usePlateCamera(); else useEditorCamera();
+      note = streamView ? 'stream camera. C to go back' : '';
+      draw();
+      return;
+    }
+
+    // Fly to whatever is selected. Indispensable once a model is small and
+    // buried behind three others.
+    if ((k === 'z' || k === 'Z') && sel && !streamView) {
+      const reach = Math.max(sel.size.x, sel.size.y, sel.size.z) * sel.tf.s * 2.4;
+      const t = new THREE.Vector3(sel.tf.x, (sel.size.y * sel.tf.s) / 2, sel.tf.z);
+      const elev = THREE.MathUtils.degToRad(32);
+      camera.position.set(t.x, t.y + Math.sin(elev) * reach, t.z + Math.cos(elev) * reach);
+      controls.target.copy(t);
+      controls.update();
+      return;
+    }
+
+    if (!sel || streamView) return;
 
     const t = sel.tf;
     switch (k) {
@@ -672,7 +752,12 @@ function startEditor() {
     if (!sel) {
       hud.innerHTML =
         `<b>CANDIVOX PLACEMENT</b>\n${n}/${placed.length} placed\n\n` +
-        `<i>click a model, or press Tab to step through them</i>` +
+        `<i>click a model, or Tab to step through them\n\n` +
+        `drag empty space   turn the view\n` +
+        `right-drag         slide the view\n` +
+        `wheel              zoom in and out\n` +
+        `C                  see the real stream shot\n` +
+        `Z                  fly to the selected model</i>` +
         (note ? `\n\n<span class="ok">${note}</span>` : '');
       return;
     }
@@ -681,13 +766,14 @@ function startEditor() {
       `<b>${sel.path.replace(/^models\//, '')}</b>${t.hidden ? '  <i>(hidden)</i>' : ''}\n` +
       `x ${t.x.toFixed(2)}   z ${t.z.toFixed(2)}   turn ${t.ry.toFixed(0)}°\n` +
       `scale ${t.s.toFixed(3)}   lift ${t.lift.toFixed(2)}\n\n` +
-      `<i>drag    move on the desk (hold Shift to snap)\n` +
-      `wheel   resize        [ ]   resize by steps\n` +
-      `Q E     turn          arrows  nudge\n` +
-      `PgUp/Dn lift          F     drop back to the desk\n` +
-      `V       hide from the live page\n` +
-      `R       start this one over    Tab  next\n` +
-      `S       save layout.json</i>` +
+      `<i>drag it   move on the desk (Shift snaps)\n` +
+      `[  ]      smaller / bigger\n` +
+      `Q  E      turn        arrows  nudge\n` +
+      `PgUp/Dn   lift        F       back down to the desk\n` +
+      `V         hide from the live page\n` +
+      `R         start this one over    Tab  next\n` +
+      `Z         fly to it   C   real stream shot\n` +
+      `S         save layout.json</i>` +
       (note ? `\n\n<span class="ok">${note}</span>` : '');
   }
 
@@ -804,7 +890,10 @@ renderer.setAnimationLoop((now) => {
   for (const p of pivots) p.rotation.y += step;
 
   if (PLATEMODE) {
-    // The camera is calibrated to the plate. Nothing gets to move it.
+    // The stream camera is calibrated and nothing gets to move it. The editor's
+    // working camera is the exception, and it turns itself off while showing
+    // the stream view or while a model is being dragged.
+    if (EDIT && controls.enabled) controls.update();
   } else if (DRAG) {
     controls.update();
   } else if (PARALLAX && framed) {

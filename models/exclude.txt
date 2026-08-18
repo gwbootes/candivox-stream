@@ -1,0 +1,14 @@
+# Models that exist in the MagicaVoxel scene but do not belong on the stage.
+#
+# One fragment of a filename per line. Anything containing it is left out of
+# manifest.json. The files themselves are never touched, so removing a line
+# here and rebuilding brings the model straight back.
+
+# Sizing blanks. Rattles built these to measure the real objects around, so
+# they are flat rectangles with nothing on them.
+screenface
+
+# Flat logo and lettering plates. They belong in the scene art, not standing
+# on the desk as props.
+Final-Candivox Logos
+candivox names
