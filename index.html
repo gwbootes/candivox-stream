@@ -61,7 +61,9 @@ import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
 //   debug  1 paints a dark backdrop and a grid so you can see the stage
 //
 //   parallax  degrees the camera leans toward the pointer (0 disables)
-//   ease      how fast that lean catches up; lower is floatier
+//   follow    1 takes the steer from stage.py; the only way this works in OBS
+//   sway      degrees of automatic lean, driven by a clock; needs no input
+//   ease      how fast the lean catches up; lower is floatier
 // ---------------------------------------------------------------------------
 const q     = new URLSearchParams(location.search);
 const num   = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) ? v : d; };
@@ -73,7 +75,11 @@ const GAP   = num('gap', 0.25);
 const EVEN  = q.get('even') === '1';
 const DRAG  = q.get('drag') === '1';
 const DEBUG = q.get('debug') === '1';
-const PARA  = num('parallax', 0);
+// follow=1 takes the lean from stage.py instead of from mouse events, which is
+// the only way it can work inside OBS. Turning it on implies wanting a lean, so
+// it brings a sensible parallax along with it.
+const FOLLOW = q.get('follow') === '1';
+const PARA  = num('parallax', FOLLOW ? 25 : 0);
 const EASE  = num('ease', 4);
 const FOV   = num('fov', 35);
 
@@ -329,7 +335,28 @@ async function boot() {
   if (bad.length) console.warn('[candivox] models that failed to load:\n' + bad.join('\n'));
 }
 
-if (PARALLAX) {
+if (PARALLAX && FOLLOW) {
+  // Asking beats waiting. OBS never delivers a mouse event to this page, so
+  // the steer gets pulled from stage.py on a timer instead. Whatever stage.py
+  // reports drives the lean, which is how Silhouette will steer it later
+  // without this file changing at all.
+  const POLL = q.get('followurl') || '/position';
+  const tick = async () => {
+    try {
+      const res = await fetch(POLL, { cache: 'no-store' });
+      if (res.ok) {
+        const d = await res.json();
+        if (Number.isFinite(d.x)) wantX = d.x;
+        if (Number.isFinite(d.y)) wantY = d.y;
+      }
+    } catch (e) {
+      // Bridge is down or restarting. Hold the last steer and keep asking;
+      // snapping to centre on every hiccup would read as a glitch on stream.
+    }
+    setTimeout(tick, 33);
+  };
+  tick();
+} else if (PARALLAX) {
   addEventListener('pointermove', (e) => {
     wantX = (e.clientX / innerWidth)  * 2 - 1;
     wantY = (e.clientY / innerHeight) * 2 - 1;

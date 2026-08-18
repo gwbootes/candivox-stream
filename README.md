@@ -48,11 +48,14 @@ https://gwbootes.github.io/candivox-stream/
 
 Use that and there is nothing to start up. It just works.
 
-**The local way, if you want it.** Double-click **`serve.bat`**. A black window
-opens. Leave it open. Then use `http://localhost:8777/index.html` instead.
+**The local way, if you want it.** Double-click **`stage.bat`**. It starts
+minimised to your taskbar. Then use `http://localhost:8777/index.html` instead.
 
 Use the local way when you are testing new models and have not pushed them yet,
-or when your internet is down.
+when your internet is down, or when you want mouse tracking in OBS. Mouse
+tracking only works this way. Step 6 covers it.
+
+`serve.bat` is the older, simpler version. `stage.bat` does everything it did.
 
 Do not open `index.html` by double-clicking it. A page opened straight off your
 hard drive is not allowed to load the model files next to it. The page comes up
@@ -130,16 +133,16 @@ The mouse pointer is hidden already. You do not have to do anything for that.
 https://gwbootes.github.io/candivox-stream/?gallery=1&spin=15&parallax=25
 ```
 
-**This will not work in OBS. Read this part.**
+**This exact setting does nothing in OBS. Read this part.**
 
 An OBS Browser source never gets your mouse. OBS only passes the mouse through
-while you right-click the source and pick **Interact**, and that is a popup
-window you have to be clicking inside of. On stream the lean sits dead still.
+while you right-click the source and pick **Interact**, and that is a popup you
+have to be clicking inside of. On stream, `parallax` on its own sits dead still.
 
 This is a limit in OBS. No setting fixes it.
 
-So use `parallax` for a browser window on your own screen, and use `sway`
-below for anything going on stream.
+`parallax` on its own is for a browser window on your own screen. **Step 6
+gets the mouse working inside OBS**, and Step 7 needs no mouse at all.
 
 Two knobs:
 
@@ -148,6 +151,7 @@ Two knobs:
 | `parallax` | `0` | How far it leans, in degrees. Try `15` to `45`. `0` turns it off |
 | `ease` | `4` | How fast it catches up. Lower is slower and floatier |
 
+| `follow` | `0` | Set to `1` to take the lean from `stage.bat`. Works in OBS |
 | `sway` | `0` | Automatic lean, in degrees. Works in OBS. `0` turns it off |
 | `swayspeed` | `0.09` | How fast the automatic lean travels, in laps per second |
 
@@ -159,7 +163,52 @@ have both, since they both want the mouse.
 
 ---
 
-## Step 6. The version that works on stream
+## Step 6. Mouse tracking that DOES work in OBS
+
+OBS will not hand the page your mouse. So the page goes and asks for it.
+
+Double-click **`stage.bat`**. It serves the page and answers the question
+"where is the mouse right now" on the same port. The page asks thirty times a
+second and leans that way.
+
+```
+http://localhost:8777/index.html?gallery=1&spin=15&follow=1
+```
+
+This has to be the `localhost` address. The GitHub one is a plain file host and
+has nothing to answer with.
+
+It follows your mouse anywhere on your desktop, across both monitors. You do
+not have to be hovering over anything.
+
+`follow=1` turns the lean on by itself, so you only need `parallax` if you want
+to change how strong it is.
+
+### Where Silhouette plugs in
+
+The page does not care that a mouse is on the other end. It asks for a
+position, and it leans toward whatever comes back.
+
+So when Silhouette knows where your PNGTuber sits on screen, it sends that
+number instead:
+
+```
+POST http://localhost:8777/position
+{"x": 0.6, "y": 0.0}
+```
+
+`x` is left to right, from `-1` to `1`. `0` is the middle. Send it whenever the
+avatar moves. The camera then follows him and ignores your mouse entirely.
+
+Stop sending for two seconds and it goes back to following the mouse on its
+own. Nothing to switch off, and a crash cannot freeze the camera pointing
+sideways.
+
+**This page needs no changes for that.** The work is all on Silhouette's side.
+
+---
+
+## Step 7. The version that needs nothing running
 
 `sway` does the same lean, driven by a clock instead of your mouse. It needs
 no input, so OBS cannot get in the way of it.
