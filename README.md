@@ -360,38 +360,46 @@ Right now that file holds `screenface`, `Final-Candivox Logos`, and
 
 ### The controls
 
-**Moving the view around:**
+There is one rule and it is worth reading before the tables.
+
+**Whatever you are holding is what the keys move.** With a model selected, the
+arrows and `Q` `E` and `PgUp` `PgDn` move that model. With nothing selected they
+move *you*. `Esc`, or a click on empty floor, puts the model down and gives the
+keys back to the camera.
+
+So the loop is: walk to where you want to judge the shot from, click a model,
+place it, `Esc`, click the next one. You never leave the view you are working in
+and there is no mode to switch.
+
+**Moving yourself, with nothing selected:**
 
 | You do | It does |
 |---|---|
-| Drag empty space | Turns the view |
-| Right-drag | Slides the view |
-| Scroll wheel | Zooms in and out |
-| `Z` | Flies to the model you have selected |
-| `C` | Shows the real stream shot. Press again to come back |
-
-`C` is the one to remember. The working camera is deliberately nothing like the
-stream camera, so `C` is how you check what people will actually see.
-
-**Moving the stream camera.** These only work while `C` has you in the stream
-shot, and while you are there the models hold still so you can judge the framing
-without knocking anything over.
-
-| You do | It does |
-|---|---|
-| `PgUp` and `PgDn` | Raises and lowers the camera |
-| Arrow up and down | Moves toward the desk and backs away |
+| Drag empty space | Grabs the floor and moves you with it |
+| Scroll wheel | Walks in and out along the way you are looking |
+| Arrow left and right | Sideways |
+| Arrow up and down | Toward the desk and back |
+| `PgUp` and `PgDn` | Up and down |
 | `Q` and `E` | Tilts down and up |
-| `R` | Back to the calibrated shot |
-| `S` | **Save** the camera along with the models |
+| `F` | Looks dead level |
+| `R` | Backs off until everything is on screen again |
+| `Z` | Flies to the model you last had selected |
+| `C` | Jumps to the real stream shot. Press again to come back |
 
-The corner panel shows the height, the distance, and the tilt as you go, and
-those three numbers get written into `layout.json` when you save. The live page
-reads them back, so the shot you find here is the shot OBS gets.
+The camera stands on the floor and faces front. It will not swing around the
+side and it will not roll over, on purpose: the stream camera cannot do those
+things either, and a shot judged through a camera that can is a shot you cannot
+actually have.
 
-The calibrated position sits almost level with the desk lip, which is where the
-plate's own camera was. It is a starting point rather than a verdict. Raise it
-until the desk reads the way you want.
+**`C` and the stream camera.** `C` puts you exactly where OBS will be. Every
+control above still works there, so you can raise it, back it off, and tilt it
+until the desk reads the way you want. The corner panel shows the height, the
+sideways offset, the distance, and the tilt the whole time, and `S` writes those
+four numbers into `layout.json` next to the models. The live page reads them
+back, so the shot you find is the shot that goes out.
+
+The calibrated position sits almost level with the desk lip, because that is
+where the plate's own camera was. Treat it as a starting point.
 
 **Moving a model:**
 
@@ -408,13 +416,14 @@ until the desk reads the way you want.
 | `V` | Hides it from the live page |
 | `R` | Starts that one over |
 | `Tab` | Next model |
-| `Esc` | Put it down |
+| `Esc` | Put it down, and take the camera back |
 | `S` | **Save** |
 
 Hold **Shift** with any key to move ten times as far. Hold **Alt** to move a tenth
-as far, for the fiddly last bit.
+as far, for the fiddly last bit. That works on the camera too.
 
-The panel in the corner always shows the numbers for whatever you are holding.
+The panel in the corner always shows the numbers for whatever you are holding,
+so it also tells you at a glance which one the keys are pointed at.
 
 ### Left and right are easy. Front and back are not.
 

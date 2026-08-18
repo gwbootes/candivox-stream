@@ -156,6 +156,7 @@ const FLOOR     = num('floor', 120);       // how far the ground grid reaches
 // Saving writes them into layout.json, so a viewpoint found by eye is the one
 // the live page uses without a single query parameter to remember.
 const camTf = {
+  x:       num('camx', 0),          // sideways, 0 being the calibrated spot
   y:       num('camy', PLATE.camY),
   z:       num('camz', 0),          // positive backs away from the desk
   pitch:   num('horizon', 0),       // added to the calibrated pitch, degrees
@@ -216,7 +217,7 @@ function usePlateCamera() {
                           / (Math.cos(pitch) + T * Math.sin(pitch));
   }
 
-  camera.position.set(0, camTf.y, camTf.z);
+  camera.position.set(camTf.x, camTf.y, camTf.z);
   camera.rotation.set(pitch, 0, 0);
   camera.near = 0.01;
   camera.far  = 10000;
@@ -224,20 +225,29 @@ function usePlateCamera() {
   controls.enabled = false;   // orbiting would throw away the match
 }
 
-// A free camera for working in, which is a different job from the stream
-// camera. The stream camera sits almost level with the wood a foot from the
-// front edge, so most of the desk is edge-on or off screen entirely. You cannot
-// arrange what you cannot see. This one backs off and looks down at the whole
-// surface, and C swaps between the two.
-function useEditorCamera() {
+// The working camera. Same shape as the stream camera on purpose: it stands on
+// the floor facing front and tilts, and it never swings around the side or
+// rolls over. A camera that can tumble is a camera you spend the whole session
+// straightening out, and every shot judged through one is a shot the stream
+// will never actually give you.
+const view = { x: 0, y: 9, z: 26, pitch: -16 };   // pitch is degrees, up is +
+
+// Push `view` onto the real camera. The one place the working camera moves.
+function applyView() {
   camera.fov  = 35;
   camera.near = 0.01;
   camera.far  = 10000;
+  camera.position.set(view.x, view.y, view.z);
+  camera.rotation.set(THREE.MathUtils.degToRad(view.pitch), 0, 0);
+  camera.updateProjectionMatrix();
+  controls.enabled = false;
+}
 
-  // Measure what is actually in the scene rather than predicting it. Saved
-  // placements can sit anywhere, so any formula built on the staging grid goes
-  // wrong the moment one model has been moved, and the models end up framed off
-  // the bottom of the screen where they cannot be clicked at all.
+// Stand back far enough to see everything that is loaded, and aim at the middle
+// of it. Measured from the scene rather than predicted, because saved
+// placements can sit anywhere and any formula built on the staging grid goes
+// wrong the moment one model has been moved.
+function useEditorCamera() {
   const bounds = new THREE.Box3();
   for (const e of placed) bounds.expandByObject(e.pivot);
   bounds.expandByPoint(new THREE.Vector3(-PLATE.width / 2, 0, -PLATE.nearZ));
@@ -246,26 +256,22 @@ function useEditorCamera() {
   const c    = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
 
-  const halfV = THREE.MathUtils.degToRad(camera.fov) / 2;
+  const halfV = THREE.MathUtils.degToRad(35) / 2;
   const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
   // Depth counts toward the vertical span, because looking down at an angle
   // turns a deep scene into a tall one on screen.
   const dist  = Math.max(
     (size.x / 2) / Math.tan(halfH),
     (Math.max(size.z, size.y) / 2) / Math.tan(halfV)
-  ) * 1.35;
+  ) * 1.3;
 
-  const elev = THREE.MathUtils.degToRad(42);
-  camera.position.set(
-    c.x,
-    c.y + Math.sin(elev) * dist,
-    c.z + Math.cos(elev) * dist
+  view.x = c.x;
+  view.y = Math.max(1, c.y + dist * 0.42);
+  view.z = bounds.max.z + dist * 0.9;
+  view.pitch = -THREE.MathUtils.radToDeg(
+    Math.atan2(view.y - c.y, view.z - c.z)
   );
-  camera.updateProjectionMatrix();
-
-  controls.enabled = true;
-  controls.target.copy(c);
-  controls.update();
+  applyView();
 }
 
 // The ground at y=0, drawn out to the horizon in every direction, with the
@@ -605,8 +611,30 @@ function startEditor() {
 
   let sel = null, box = null, dragging = false, dragDX = 0, dragDZ = 0, note = '';
   let streamView = false;   // false means the free working camera
+  let panning = false;
+  const panLast = new THREE.Vector2();
 
   useEditorCamera();
+
+  // Whichever camera the keys and the mouse are currently driving. Both are the
+  // same shape, so everything below works on either without knowing which.
+  const active = () => (streamView ? camTf : view);
+
+  // Put the numbers back on the real camera after anything changes them.
+  function refresh() {
+    if (streamView) { camTf.scouted = true; usePlateCamera(); }
+    else applyView();
+    draw();
+  }
+
+  // How many world units one pixel covers, near whatever is being looked at.
+  // Panning by a fixed amount per pixel feels wrong at every distance except
+  // the one it was tuned for.
+  function unitsPerPixel() {
+    const cam = active();
+    const reach = Math.max(2, Math.hypot(cam.y, cam.z + PLATE.nearZ + PLATE.depth / 2));
+    return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * reach / innerHeight;
+  }
 
   // Where the pointer meets the desk surface, in world units. Returns false
   // when the ray goes above the horizon and never touches the plane.
@@ -667,22 +695,34 @@ function startEditor() {
   // of every attempt to move a model went into swinging the camera instead.
   addEventListener('pointerdown', (ev) => {
     if (ev.target !== renderer.domElement) return;
+    if (ev.button !== 0) return;
     const e = pick(ev);
     select(e);
-    if (e && ev.button === 0 && onDesk(ev)) {
+    if (e && onDesk(ev)) {
       // Grab it where it was clicked, not by its middle, so it does not jump
       // out from under the cursor the instant it is touched.
       dragging = true;
       dragDX = e.tf.x - hit.x;
       dragDZ = e.tf.z - hit.z;
-      // Left-drag means orbit everywhere except on top of a model, so the
-      // camera has to let go for the length of the drag.
-      controls.enabled = false;
-      renderer.domElement.setPointerCapture(ev.pointerId);
+    } else {
+      // Empty space, so the drag moves you instead of a model. Grabbing the
+      // world is the gesture everyone already has for this, and it saves
+      // hunting for a key every time the shot needs to shift a little.
+      panning = true;
+      panLast.set(ev.clientX, ev.clientY);
     }
+    renderer.domElement.setPointerCapture(ev.pointerId);
   }, true);
 
   renderer.domElement.addEventListener('pointermove', (ev) => {
+    if (panning) {
+      const cam = active(), u = unitsPerPixel();
+      cam.x -= (ev.clientX - panLast.x) * u;
+      cam.y  = Math.max(0, cam.y + (ev.clientY - panLast.y) * u);
+      panLast.set(ev.clientX, ev.clientY);
+      refresh();
+      return;
+    }
     if (!dragging || !sel || !onDesk(ev)) return;
     sel.tf.x = hit.x + dragDX;
     sel.tf.z = hit.z + dragDZ;
@@ -693,9 +733,24 @@ function startEditor() {
     commit();
   });
 
-  const stop = () => { dragging = false; if (!streamView) controls.enabled = true; };
+  const stop = () => { dragging = false; panning = false; };
   renderer.domElement.addEventListener('pointerup', stop);
   renderer.domElement.addEventListener('pointercancel', stop);
+
+  // The wheel walks the camera along the way it is pointing, so zooming in on
+  // the desk also comes down toward it instead of sliding back at a fixed
+  // height and ending up staring at the ceiling.
+  renderer.domElement.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const cam  = active();
+    const p    = THREE.MathUtils.degToRad(
+      (streamView ? PLATE.pitch : 0) + cam.pitch
+    );
+    const back = Math.sign(ev.deltaY) * (ev.shiftKey ? 8 : ev.altKey ? 0.2 : 1.5);
+    cam.z += back * Math.cos(p);
+    cam.y  = Math.max(0, cam.y - back * Math.sin(p));
+    refresh();
+  }, { passive: false });
 
   addEventListener('keydown', (ev) => {
     const k = ev.key;
@@ -723,41 +778,44 @@ function startEditor() {
     // buried behind three others.
     if ((k === 'z' || k === 'Z') && sel && !streamView) {
       const reach = Math.max(sel.size.x, sel.size.y, sel.size.z) * sel.tf.s * 2.4;
-      const t = new THREE.Vector3(sel.tf.x, (sel.size.y * sel.tf.s) / 2, sel.tf.z);
-      const elev = THREE.MathUtils.degToRad(32);
-      camera.position.set(t.x, t.y + Math.sin(elev) * reach, t.z + Math.cos(elev) * reach);
-      controls.target.copy(t);
-      controls.update();
+      const ty = (sel.size.y * sel.tf.s) / 2 + sel.tf.lift;
+      view.x = sel.tf.x;
+      view.y = Math.max(0.4, ty + reach * 0.4);
+      view.z = sel.tf.z + reach;
+      view.pitch = -THREE.MathUtils.radToDeg(
+        Math.atan2(view.y - ty, view.z - sel.tf.z)
+      );
+      refresh();
       return;
     }
 
-    // Stream view is where the shot gets judged, so it drives the camera and
-    // nothing else. Same keys as the model controls on purpose: PgUp/PgDn for
-    // height, arrows to move, Q and E to turn, R to start over.
-    if (streamView) {
-      const before = `${camTf.y},${camTf.z},${camTf.pitch}`;
+    // With nothing selected the keys drive the camera, and selecting a model
+    // hands the same keys to the model. That is the whole scheme: no mode to
+    // remember, and walking to the next thing never means leaving the view you
+    // were judging the shot in. Esc puts a model down and gives them back.
+    if (!sel) {
+      const cam = active();
+      const g   = streamView ? 0.25 : 1;   // the stream shot wants finer steps
       switch (k) {
-        case 'PageUp':     camTf.y     += step(ev, 0.25); break;
-        case 'PageDown':   camTf.y      = Math.max(0, camTf.y - step(ev, 0.25)); break;
-        case 'ArrowUp':    camTf.z     -= step(ev, 0.25); break;   // toward the desk
-        case 'ArrowDown':  camTf.z     += step(ev, 0.25); break;   // back away
-        case 'q': case 'Q': camTf.pitch -= step(ev, 0.5); break;
-        case 'e': case 'E': camTf.pitch += step(ev, 0.5); break;
+        case 'ArrowLeft':   cam.x -= step(ev, g); break;
+        case 'ArrowRight':  cam.x += step(ev, g); break;
+        case 'ArrowUp':     cam.z -= step(ev, g); break;   // toward the desk
+        case 'ArrowDown':   cam.z += step(ev, g); break;   // back away
+        case 'PageUp':      cam.y += step(ev, g * 0.5); break;
+        case 'PageDown':    cam.y  = Math.max(0, cam.y - step(ev, g * 0.5)); break;
+        case 'q': case 'Q': cam.pitch -= step(ev, g * 2); break;
+        case 'e': case 'E': cam.pitch += step(ev, g * 2); break;
+        case 'f': case 'F': cam.pitch = streamView ? -PLATE.pitch : 0; break;
         case 'r': case 'R':
-          camTf.y = PLATE.camY; camTf.z = 0; camTf.pitch = 0;
+          if (streamView) { camTf.x = 0; camTf.y = PLATE.camY; camTf.z = 0; camTf.pitch = 0; }
+          else useEditorCamera();
           break;
         default: return;
       }
       ev.preventDefault();
-      // Moving it by hand retires the flush solve, which would otherwise
-      // recompute the height and undo every press.
-      if (`${camTf.y},${camTf.z},${camTf.pitch}` !== before) camTf.scouted = true;
-      usePlateCamera();
-      draw();
+      refresh();
       return;
     }
-
-    if (!sel) return;
 
     const t = sel.tf;
     switch (k) {
@@ -797,6 +855,7 @@ function startEditor() {
     // of the shot as what is on the desk, and keeping it in the same file means
     // there is one thing to reload rather than a query string to retype.
     const cam = {
+      x:     +camTf.x.toFixed(4),
       y:     +camTf.y.toFixed(4),
       z:     +camTf.z.toFixed(4),
       pitch: +camTf.pitch.toFixed(3),
@@ -822,34 +881,27 @@ function startEditor() {
   function draw() {
     const n = placed.filter(e => e.tf).length;
 
-    if (streamView) {
-      // The numbers matter as much as the picture. This is the shot OBS gets,
-      // and S writes these three into layout.json alongside the models, so a
-      // viewpoint found by eye survives the reload.
-      hud.innerHTML =
-        `<b>STREAM CAMERA</b>\n` +
-        `height ${camTf.y.toFixed(2)}   back ${camTf.z.toFixed(2)}   ` +
-        `tilt ${(PLATE.pitch + camTf.pitch).toFixed(2)}°\n` +
-        `<i>${camTf.scouted ? 'moved from the calibrated spot' : 'calibrated to the plate'}</i>\n\n` +
-        `<i>PgUp/PgDn   up and down\n` +
-        `arrows      toward the desk / back off\n` +
-        `Q  E        tilt down / up\n` +
-        `R           back to the calibrated shot\n` +
-        `S           save it        C   back to the editor\n\n` +
-        `Shift for ten times, Alt for a tenth</i>` +
-        (note ? `\n\n<span class="ok">${note}</span>` : '');
-      return;
-    }
-
     if (!sel) {
+      // Nothing held, so the keys are driving the camera and the panel says so.
+      // The numbers matter as much as the picture when the camera is the stream
+      // camera, since S writes them into layout.json and the live page uses them.
+      const cam = active();
       hud.innerHTML =
-        `<b>CANDIVOX PLACEMENT</b>\n${n}/${placed.length} placed\n\n` +
-        `<i>click a model, or Tab to step through them\n\n` +
-        `drag empty space   turn the view\n` +
-        `right-drag         slide the view\n` +
-        `wheel              zoom in and out\n` +
-        `C                  see the real stream shot\n` +
-        `Z                  fly to the selected model</i>` +
+        (streamView
+          ? `<b>STREAM CAMERA</b>  <i>the real shot</i>\n`
+          : `<b>CANDIVOX PLACEMENT</b>  ${n}/${placed.length} placed\n`) +
+        `height ${cam.y.toFixed(2)}   across ${cam.x.toFixed(2)}   ` +
+        `back ${cam.z.toFixed(2)}   tilt ${((streamView ? PLATE.pitch : 0) + cam.pitch).toFixed(1)}°\n\n` +
+        `<i>click a model to pick it up, or Tab through them\n` +
+        `drag empty space   move yourself around\n` +
+        `wheel              walk in and out\n` +
+        `arrows             sideways and forward\n` +
+        `PgUp/PgDn          up and down\n` +
+        `Q  E               tilt down / up\n` +
+        `F                  look level\n` +
+        `R                  ${streamView ? 'back to the calibrated shot' : 'see everything again'}\n` +
+        `C                  ${streamView ? 'back to the work camera' : 'jump to the real stream shot'}\n` +
+        `S                  save</i>` +
         (note ? `\n\n<span class="ok">${note}</span>` : '');
       return;
     }
@@ -876,7 +928,7 @@ function startEditor() {
   // selection works without a human at the mouse.
   if (q.get('diag') === '1') {
     const lines = [`placed=${placed.length}  pivots=${pivots.length}  stagingReach=${stagingReach.toFixed(1)}`];
-    lines.push(`camera ${camera.position.toArray().map(v => v.toFixed(1)).join(',')}  target ${controls.target.toArray().map(v => v.toFixed(1)).join(',')}`);
+    lines.push(`camera ${camera.position.toArray().map(v => v.toFixed(1)).join(',')}  pitch ${view.pitch.toFixed(1)}`);
 
     for (const e of placed) {
       let meshes = 0;
@@ -948,6 +1000,7 @@ async function boot() {
         // never has to overwrite the shot that is already working.
         const cam = data.camera;
         if (cam) {
+          if (!q.get('camx')    && Number.isFinite(cam.x))     camTf.x = cam.x;
           if (!q.get('camy')    && Number.isFinite(cam.y))     camTf.y = cam.y;
           if (!q.get('camz')    && Number.isFinite(cam.z))     camTf.z = cam.z;
           if (!q.get('horizon') && Number.isFinite(cam.pitch)) camTf.pitch = cam.pitch;
@@ -1058,10 +1111,9 @@ renderer.setAnimationLoop((now) => {
   for (const p of pivots) p.rotation.y += step;
 
   if (PLATEMODE) {
-    // The stream camera is calibrated and nothing gets to move it. The editor's
-    // working camera is the exception, and it turns itself off while showing
-    // the stream view or while a model is being dragged.
-    if (EDIT && controls.enabled) controls.update();
+    // Both cameras here are driven straight from numbers, so there is nothing
+    // to integrate each frame. OrbitControls stays out of it entirely: a camera
+    // that can tumble is the wrong tool for judging a shot that cannot.
   } else if (DRAG) {
     controls.update();
   } else if (PARALLAX && framed) {
