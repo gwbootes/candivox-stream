@@ -1,0 +1,20 @@
+# Test model. Not art — this exists so the viewer can be proven working
+# before any real asset is exported. Load it with:
+#   index.html?model=models/test-cube.obj&debug=1
+mtllib test-cube.mtl
+o test_cube
+v -1.0 -1.0 -1.0
+v  1.0 -1.0 -1.0
+v  1.0  1.0 -1.0
+v -1.0  1.0 -1.0
+v -1.0 -1.0  1.0
+v  1.0 -1.0  1.0
+v  1.0  1.0  1.0
+v -1.0  1.0  1.0
+usemtl candivox_teal
+f 5 6 7 8
+f 2 1 4 3
+f 1 5 8 4
+f 6 2 3 7
+f 4 8 7 3
+f 1 2 6 5

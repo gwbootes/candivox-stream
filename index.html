@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Candivox Model Stage</title>
+<style>
+  /* OBS composites this page over the scene below it, so nothing here may
+     paint an opaque background — not html, not body, not the canvas. */
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  canvas { display: block; background: transparent; }
+
+  /* Only ever visible while something is wrong. A silent black rectangle in
+     OBS is indistinguishable from a broken source, so failures must speak. */
+  #err {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    font: 14px/1.5 ui-monospace, Consolas, monospace;
+    color: #ffd7d7; background: rgba(40, 0, 0, .82);
+    padding: 2rem; text-align: center; white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<div id="err"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.184.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader }     from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader }     from 'three/addons/loaders/MTLLoader.js';
+import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+
+// ---------------------------------------------------------------------------
+// One page serves every asset. Everything is driven off the query string.
+//
+//   ONE MODEL      index.html?model=models/television.obj
+//   THE WHOLE SET  index.html?gallery=1
+//   A CHOSEN FEW   index.html?models=models/tv.obj,models/gacha.obj
+//
+//   spin   auto-rotation in degrees per second (0 to hold still)
+//   yaw    starting turn, degrees
+//   pitch  camera height angle, degrees above the middle
+//   zoom   distance multiplier; 1 frames things snugly
+//   gap    space between models in a row, as a fraction of their width
+//   even   1 rescales every model to the same height
+//   drag   1 allows mouse orbit (needs OBS "Interact")
+//   debug  1 paints a dark backdrop and a grid so you can see the stage
+// ---------------------------------------------------------------------------
+const q     = new URLSearchParams(location.search);
+const num   = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) ? v : d; };
+const SPIN  = num('spin', 12);
+const YAW   = num('yaw', 0);
+const PITCH = num('pitch', 14);
+const ZOOM  = num('zoom', 1);
+const GAP   = num('gap', 0.25);
+const EVEN  = q.get('even') === '1';
+const DRAG  = q.get('drag') === '1';
+const DEBUG = q.get('debug') === '1';
+
+const fail = (msg) => {
+  const el = document.getElementById('err');
+  el.textContent = msg;
+  el.style.display = 'flex';
+};
+
+const scene    = new THREE.Scene();
+const camera   = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100000);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 0);   // the 0 alpha is what OBS keys on
+document.body.appendChild(renderer.domElement);
+
+if (DEBUG) {
+  renderer.setClearColor(0x141018, 1);
+  scene.add(new THREE.GridHelper(400, 40, 0x00ffc8, 0x334455));
+}
+
+// Voxel work reads best with flat, even light: one soft sky/ground wash so no
+// face goes black, plus two directionals at opposing angles to keep the cube
+// edges legible. Strong single-key lighting turns voxel art into mush.
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404058, 2.0));
+const key  = new THREE.DirectionalLight(0xffffff, 1.5); key.position.set(1, 2, 1.5);
+const fill = new THREE.DirectionalLight(0xffffff, 0.7); fill.position.set(-1.5, 0.6, -1);
+scene.add(key, fill);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.enabled = DRAG;
+
+const pivots = [];   // one per model; each spins about its own middle
+
+// MagicaVoxel writes its palette as a tiny image — often a single row of
+// colour swatches. Three's default linear filtering blends neighbouring
+// swatches, so every voxel comes out smeared with the wrong colour. Nearest
+// sampling is mandatory here, not a stylistic choice.
+function crispenTextures(root) {
+  root.traverse((child) => {
+    if (!child.isMesh) return;
+    for (const mat of [].concat(child.material)) {
+      if (!mat || !mat.map) continue;
+      mat.map.magFilter  = THREE.NearestFilter;
+      mat.map.minFilter  = THREE.NearestFilter;
+      mat.map.generateMipmaps = false;
+      mat.map.colorSpace = THREE.SRGBColorSpace;
+      mat.map.needsUpdate = true;
+    }
+  });
+}
+
+// Filenames here contain spaces and capitals ("2-stereo rack.obj"), so every
+// path segment has to be encoded or the fetch 404s while the folder looks fine.
+const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
+
+function loadOne(path) {
+  const ext  = path.split('.').pop().toLowerCase();
+  const dir  = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+  const file = path.slice(dir.length);
+
+  return new Promise((resolve, reject) => {
+    if (ext === 'glb' || ext === 'gltf') {
+      new GLTFLoader().load(encodePath(path), (g) => resolve(g.scene), undefined, reject);
+      return;
+    }
+    if (ext !== 'obj') { reject(new Error(`Unsupported format ".${ext}"`)); return; }
+
+    // MagicaVoxel emits three files together: model.obj, model.mtl and the
+    // palette .png, all sharing a name. A missing .mtl is survivable — the
+    // mesh loads grey — so fall back to a bare OBJ rather than failing.
+    const objLoader = new OBJLoader();
+    const bare = () => objLoader.setPath(encodePath(dir))
+      .load(encodeURIComponent(file), resolve, undefined, reject);
+
+    new MTLLoader()
+      .setPath(encodePath(dir))
+      .setResourcePath(encodePath(dir))
+      .load(
+        encodeURIComponent(file.replace(/\.obj$/i, '.mtl')),
+        (materials) => {
+          materials.preload();
+          objLoader.setMaterials(materials).setPath(encodePath(dir))
+            .load(encodeURIComponent(file), resolve, undefined, reject);
+        },
+        undefined,
+        bare
+      );
+  });
+}
+
+// Models arrive at wildly different voxel scales and none of them sit on the
+// origin, so every one gets measured and re-centred rather than hand-placed.
+function prepare(object) {
+  crispenTextures(object);
+  const box    = new THREE.Box3().setFromObject(object);
+  const size   = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  object.position.sub(centre);
+
+  const pivot = new THREE.Group();
+  pivot.add(object);
+  pivot.rotation.y = THREE.MathUtils.degToRad(YAW);
+  return { pivot, size };
+}
+
+// Lay the set out in a single row along X. Each model keeps its own pivot so
+// it turns about its own middle instead of orbiting the row's centre.
+function layout(entries) {
+  if (!entries.length) { fail('Nothing loaded.'); return; }
+
+  if (EVEN) {
+    const tallest = Math.max(...entries.map(e => e.size.y));
+    for (const e of entries) {
+      const s = tallest / (e.size.y || 1);
+      e.pivot.scale.setScalar(s);
+      e.size = e.size.clone().multiplyScalar(s);
+    }
+  }
+
+  // A rotating model sweeps a circle, so reserve its diagonal footprint or
+  // neighbours clip through each other as they turn.
+  const widths = entries.map(e => Math.hypot(e.size.x, e.size.z));
+  const total  = widths.reduce((a, w) => a + w, 0) + GAP * widths[0] * (entries.length - 1);
+
+  let x = -total / 2;
+  for (let i = 0; i < entries.length; i++) {
+    x += widths[i] / 2;
+    entries[i].pivot.position.x = x;
+    x += widths[i] / 2 + GAP * widths[0];
+    scene.add(entries[i].pivot);
+    pivots.push(entries[i].pivot);
+  }
+
+  const height = Math.max(...entries.map(e => e.size.y));
+  const span   = Math.max(total, height) || 1;
+  const dist   = (span / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2))) * 1.25 * ZOOM;
+  const rad    = THREE.MathUtils.degToRad(PITCH);
+  camera.position.set(0, Math.sin(rad) * dist, Math.cos(rad) * dist);
+  camera.near = Math.max(dist / 1000, 0.01);
+  camera.far  = dist * 100;
+  camera.updateProjectionMatrix();
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+async function boot() {
+  let paths = [];
+
+  if (q.get('gallery') === '1') {
+    // A browser cannot list a folder, so the set is declared in manifest.json.
+    // Re-run make-manifest.bat after exporting new models.
+    try {
+      const res  = await fetch('models/manifest.json');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      paths = data.models.map(n => 'models/' + n);
+    } catch (e) {
+      fail(`Could not read models/manifest.json\n${e.message}\n\nRun make-manifest.bat, then reload.`);
+      return;
+    }
+  } else if (q.get('models')) {
+    paths = q.get('models').split(',').map(s => s.trim()).filter(Boolean);
+  } else if (q.get('model')) {
+    paths = [q.get('model')];
+  } else {
+    fail('No model given.\n\nOne model:  ?model=models/yourfile.obj\nAll of them: ?gallery=1');
+    return;
+  }
+
+  const results = await Promise.allSettled(paths.map(loadOne));
+  const good = [], bad = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') good.push(prepare(r.value));
+    else bad.push(`${paths[i]} — ${r.reason?.message || r.reason}`);
+  });
+
+  if (!good.length) { fail(`Nothing loaded.\n\n${bad.join('\n')}`); return; }
+  layout(good);
+  if (bad.length) console.warn('[candivox] models that failed to load:\n' + bad.join('\n'));
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+addEventListener('error', (e) => fail(`Script error:\n${e.message}`));
+
+let last = performance.now();
+renderer.setAnimationLoop((now) => {
+  const dt = (now - last) / 1000; last = now;
+  const step = THREE.MathUtils.degToRad(SPIN) * dt;
+  for (const p of pivots) p.rotation.y += step;
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+boot();
+</script>
+</body>
+</html>
