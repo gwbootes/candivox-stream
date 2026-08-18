@@ -320,11 +320,15 @@ This is the part where you actually decorate.
 Start **`stage.bat`**, then open this in a normal browser window:
 
 ```
-http://localhost:8777/index.html?edit=1
+http://localhost:8777/index.html?edit=1&flush=1
 ```
 
 It has to be `localhost`. The GitHub page can show you the editor, but there is
 nothing on the other end to save the file.
+
+Use the same camera settings you plan to stream with. Above is `flush=1`, so
+drop that if you decide against it. The models end up in the same place either
+way. You just want to be looking through the lens you will actually use.
 
 You will see every model standing in a row on the desk, turning. A turning model
 means "not put down yet." Click one and it stops turning. That is you picking it up.
@@ -352,6 +356,23 @@ Hold **Shift** with any key to move ten times as far. Hold **Alt** to move a ten
 as far, for the fiddly last bit.
 
 The panel in the corner always shows the numbers for whatever you are holding.
+
+### Left and right are easy. Front and back are not.
+
+Dragging sideways is precise. Dragging deeper is horrible, and it is horrible
+for a real reason.
+
+The camera sits almost level with the desk. So the whole back half of a ten-unit
+desk lands in about fifteen pixels of screen. One pixel of mouse movement near
+the back is a huge jump in depth. There is nothing to fix there. It is what the
+perspective does.
+
+So work in two passes. **Drag to get it roughly right, then use the up and down
+arrows for depth.** Each press moves it a tenth of a unit, which is fine control
+no amount of mouse skill will match.
+
+Practically, the front two or three units of desk are where things belong. Past
+that they are too small to read on stream anyway.
 
 ### About hiding
 

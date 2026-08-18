@@ -378,7 +378,11 @@ const defaultTf = () => ({ x: 0, z: -(PLATE.nearZ + PLATE.depth / 2), ry: YAW, s
 function applyTf(e) {
   if (!e.tf) return;
   const t = e.tf;
-  e.pivot.scale.setScalar(t.s);
+  // even=1 already rescaled this model before the editor ever saw it, and that
+  // factor is baked into e.size. Multiplying rather than replacing keeps the
+  // stored scale meaning "how much bigger than normal", so a saved layout does
+  // not shift the moment even= is turned on or off.
+  e.pivot.scale.setScalar(t.s * (e.baseScale || 1));
   e.pivot.rotation.y = THREE.MathUtils.degToRad(t.ry);
   e.pivot.position.set(t.x, (e.size.y * t.s) / 2 + t.lift, t.z);
   // Hiding is for the live page. Inside the editor a hidden model stays on
@@ -397,6 +401,8 @@ function layout(entries) {
       const s = tallest / (e.size.y || 1);
       e.pivot.scale.setScalar(s);
       e.size = e.size.clone().multiplyScalar(s);
+      // Remembered so the editor can keep its own scale separate from this one.
+      e.baseScale = s;
     }
   }
 
@@ -409,7 +415,6 @@ function layout(entries) {
   for (let i = 0; i < entries.length; i++) {
     x += widths[i] / 2;
     entries[i].pivot.position.x = x;
-    entries[i].rowX = x;
     x += widths[i] / 2 + GAP * widths[0];
     scene.add(entries[i].pivot);
     placed.push(entries[i]);
@@ -541,7 +546,9 @@ function startEditor() {
         x: sel.pivot.position.x,
         z: sel.pivot.position.z,
         ry: (THREE.MathUtils.radToDeg(sel.pivot.rotation.y) % 360 + 360) % 360,
-        s: sel.pivot.scale.x,
+        // Divided back out for the same reason applyTf multiplies it in: the
+        // saved number means "bigger than normal", never "bigger than even=1".
+        s: sel.pivot.scale.x / (sel.baseScale || 1),
         lift: 0,
         hidden: false,
       };
