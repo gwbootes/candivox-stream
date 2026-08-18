@@ -120,6 +120,29 @@ const SWAYING  = SWAY > 0 && !DRAG && !PARALLAX;
 // Whichever mode is live owns the swing, measured in degrees either way.
 const SWING    = PARALLAX ? PARA : (SWAYING ? SWAY : 0);
 
+// ---------------------------------------------------------------------------
+// POINTER LEAN, on the calibrated shot
+//
+// The stream camera is solved rather than posed, so leaning it cannot mean
+// throwing the solution away. The calibrated position and pitch stay its home
+// and it travels a short way either side of them.
+//
+// The travel is the whole point. Turning a camera on the spot moves everything
+// in frame by the same amount and reads dead flat, so this dollies sideways
+// instead and the near models slide across the far ones by real parallax. A
+// partial counter-turn then holds the set roughly where it was framed, which
+// matters on this set because the crops at the frame edges are deliberate.
+//
+//   lean       world units travelled at full deflection. 0 turns it off.
+//   leanlock   1 pins the framing and leaves pure parallax, 0 lets the whole
+//              shot drift with the steer. Between is the useful range.
+//   leanpivot  the depth the framing is held at, in front of the camera.
+// ---------------------------------------------------------------------------
+const LEAN      = num('lean', 0.35);
+const LEANY     = num('leany', LEAN * 0.45);
+const LEANPIVOT = Math.max(0.5, num('leanpivot', 6));
+const LEANLOCK  = Math.min(1, Math.max(0, num('leanlock', 0.85)));
+
 // The placement editor. Everything it does happens on the desk surface, so it
 // turns plate mode on for itself: placing a model against no reference at all
 // would just be moving it around in the dark.
@@ -154,11 +177,36 @@ const PLATE = {
 
 const PLATEMODE = q.get('plate') === '1' || EDIT;
 // The grid is what makes depth readable while dragging, so the editor brings it
-// along unless it is turned off by hand with grid=0.
+// along unless it is turned off by hand with grid=0. H hides it mid-session.
 const GRID      = q.get('grid') === '1' || (EDIT && q.get('grid') !== '0');
 const SHOWBG    = q.get('bg') === '1';
 const CELL      = num('cell', 1);          // grid square size in obj units
 const FLOOR     = num('floor', 120);       // how far the ground grid reaches
+
+// The desk's own two browns, read out of its MagicaVoxel palette rather than
+// picked by eye: 54.5% of its surface is the lighter one, 45.5% the darker.
+// These stand in for the real floor and desk colours until those are chosen.
+// Judging a model's colour against a teal that will never be there is worse
+// than judging it against nothing, because it looks like an answer.
+const DESK_LIGHT = '#4D3726';
+const DESK_DARK  = '#382713';
+const col = (name, dflt) => {
+  const v = q.get(name);
+  return new THREE.Color(v ? (v[0] === '#' ? v : '#' + v) : dflt);
+};
+const GRIDCOL = col('gridcolor',  DESK_LIGHT);
+const FILLCOL = col('floorcolor', DESK_DARK);
+const FILL    = q.get('fill') !== '0';     // the solid floor under the lines
+
+// The lean only means anything on the calibrated shot, so it rides with plate
+// mode. Hand orbiting wants the mouse for itself and wins outright.
+const LEANING = PLATEMODE && LEAN > 0 && !DRAG;
+// Something wants steering, whether that is the old orbit or this one. Both
+// read the same wantX/wantY, so they share one set of inputs.
+const STEERED = PARALLAX || LEANING;
+// The editor keeps it parked until P asks for it, since a camera that drifts
+// while you are dragging a model is a camera fighting you.
+let leanOn = !EDIT;
 
 // Where the stream camera stands. These start at the calibrated numbers, or at
 // whatever the URL asks for, and the editor's stream view moves them from there.
@@ -259,11 +307,32 @@ function usePlateCamera() {
   }
 
   camera.position.set(camTf.x, camTf.y, camTf.z);
+  // YXZ turns about the upright axis before tilting, the order a tripod head
+  // works in. The lean below writes both, and the default order would roll the
+  // shot sideways as it panned.
+  camera.rotation.order = 'YXZ';
   camera.rotation.set(pitch, 0, 0);
   camera.near = 0.01;
   camera.far  = 10000;
   camera.updateProjectionMatrix();
   controls.enabled = false;   // orbiting would throw away the match
+}
+
+// Offset the calibrated camera by however far the steer has currently travelled.
+// haveX and haveY are -1..1 from the middle of the frame, so this is the same
+// input the old orbit takes and the follow=1 bridge already feeds.
+function leanCamera() {
+  const home = THREE.MathUtils.degToRad(PLATE.pitch + camTf.pitch);
+  const dx   = haveX * LEAN;
+  const dy   = -haveY * LEANY;   // steering downward dips the camera
+
+  // Turn back by the angle that would put the pivot depth in the middle of
+  // frame again, taking only the fraction of it that leanlock asks for.
+  const yaw  = Math.atan2(dx, LEANPIVOT) * LEANLOCK;
+  const tilt = Math.atan2(dy, LEANPIVOT) * LEANLOCK;
+
+  camera.position.set(camTf.x + dx, camTf.y + dy, camTf.z);
+  camera.rotation.set(home - tilt, yaw, 0);
 }
 
 // The working camera. Same shape as the stream camera on purpose: it stands on
@@ -323,6 +392,9 @@ function useEditorCamera() {
 // every other question: a 25 by 10 patch floating in the middle of nothing
 // tells you nothing about where to stand a camera or how far back the room
 // goes. The floor runs past the desk now, and the desk is a rectangle on it.
+// Everything it builds goes in one group, so H can hide the lot in one line
+// and put it back without rebuilding anything.
+let gridGroup = null;
 function buildGrid() {
   const zFront = -PLATE.nearZ;
   const zBack  = -(PLATE.nearZ + PLATE.depth);
@@ -331,6 +403,23 @@ function buildGrid() {
   const first  = -Math.ceil(reach / CELL) * CELL;   // snapped so lines meet at 0
   const pts    = [];
 
+  gridGroup = new THREE.Group();
+  scene.add(gridGroup);
+
+  // A solid floor under the lines, in the desk's darker brown. Sits a hair
+  // below y=0 so the lines and the desk outline keep the pixel rather than
+  // flickering against it, and unlit on purpose: this is a colour reference,
+  // and a reference that shades is a reference that lies.
+  if (FILL) {
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(reach * 2, reach * 2),
+      new THREE.MeshBasicMaterial({ color: FILLCOL })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.002;
+    gridGroup.add(floor);
+  }
+
   for (let v = first; v <= reach + 1e-6; v += CELL) {
     pts.push(-reach, 0, v, reach, 0, v);   // left to right, stepping back
     pts.push(v, 0, -reach, v, 0, reach);   // front to back, the perspective ones
@@ -338,9 +427,9 @@ function buildGrid() {
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  scene.add(new THREE.LineSegments(
+  gridGroup.add(new THREE.LineSegments(
     geo,
-    new THREE.LineBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.28 })
+    new THREE.LineBasicMaterial({ color: GRIDCOL, transparent: true, opacity: 0.5 })
   ));
 
   // The two axes through the origin, brighter, because the camera stands at
@@ -350,13 +439,14 @@ function buildGrid() {
     -reach, 0, 0,  reach, 0, 0,
     0, 0, -reach,  0, 0, reach,
   ], 3));
-  scene.add(new THREE.LineSegments(
+  gridGroup.add(new THREE.LineSegments(
     axes,
-    new THREE.LineBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.7 })
+    new THREE.LineBasicMaterial({ color: GRIDCOL, transparent: true, opacity: 0.95 })
   ));
 
   // The desk, all four sides, so its edges stay obvious against a floor that
-  // now runs straight past them.
+  // now runs straight past them. This one stays pink: it is the one thing here
+  // that is a measurement rather than a colour, and it has to read instantly.
   const edge = new THREE.BufferGeometry();
   edge.setAttribute('position', new THREE.Float32BufferAttribute([
     -halfW, 0, zFront,  halfW, 0, zFront,
@@ -364,7 +454,7 @@ function buildGrid() {
      halfW, 0, zBack,  -halfW, 0, zBack,
     -halfW, 0, zBack,  -halfW, 0, zFront,
   ], 3));
-  scene.add(new THREE.LineSegments(
+  gridGroup.add(new THREE.LineSegments(
     edge, new THREE.LineBasicMaterial({ color: 0xff3ea5 })
   ));
 }
@@ -944,6 +1034,37 @@ function startEditor() {
       return;
     }
 
+    // The floor is scaffolding, and scaffolding has to come down to see the
+    // building. Holds whatever it was on, so it can be flicked on and off
+    // against the same shot without touching anything else.
+    if (k === 'h' || k === 'H') {
+      ev.preventDefault();
+      if (!gridGroup) { note = 'no floor loaded. put grid=1 in the address.'; draw(); return; }
+      gridGroup.visible = !gridGroup.visible;
+      note = gridGroup.visible ? 'floor and grid back' : 'floor and grid hidden';
+      draw();
+      return;
+    }
+
+    // Watch the lean without leaving the editor. It only exists on the
+    // calibrated shot, so it switches to that first rather than doing nothing
+    // and looking broken.
+    if (k === 'p' || k === 'P') {
+      ev.preventDefault();
+      if (!LEANING) { note = 'lean is off. put lean=0.35 in the address.'; draw(); return; }
+      if (!streamView) { streamView = true; usePlateCamera(); }
+      leanOn = !leanOn;
+      if (!leanOn) {
+        wantX = wantY = haveX = haveY = 0;
+        usePlateCamera();   // straight back to the solved shot, no drift left
+      }
+      note = leanOn
+        ? 'lean on, move the mouse. P again to park it.'
+        : 'lean off, back on the calibrated shot.';
+      draw();
+      return;
+    }
+
     // Check the real shot without leaving the editor. This is the camera OBS
     // will use, framing and all, so it is the only honest preview.
     if (k === 'c' || k === 'C') {
@@ -1088,6 +1209,8 @@ function startEditor() {
         `F                  look level\n` +
         `R                  ${streamView ? 'back to the calibrated shot' : 'see everything again'}\n` +
         `C                  ${streamView ? 'back to the work camera' : 'jump to the real stream shot'}\n` +
+        `H                  ${gridGroup && !gridGroup.visible ? 'floor back on' : 'hide the floor'}\n` +
+        `P                  ${leanOn ? 'park the lean' : 'lean with the mouse'}\n` +
         `S                  save   Ctrl+Z  undo</i>` +
         (note ? `\n\n<span class="ok">${note}</span>` : '');
       return;
@@ -1110,6 +1233,7 @@ function startEditor() {
       `Del       remove a copy   Shift+R  start this one over\n` +
       `R         see everything again    Tab  next\n` +
       `Z         fly to it   C   real stream shot\n` +
+      `H         hide the floor      P   lean with the mouse\n` +
       `S         save layout.json   Ctrl+Z  undo</i>` +
       (note ? `\n\n<span class="ok">${note}</span>` : '');
   }
@@ -1266,7 +1390,7 @@ async function boot() {
   if (bad.length) console.warn('[candivox] models that failed to load:\n' + bad.join('\n'));
 }
 
-if (PARALLAX && FOLLOW) {
+if (STEERED && FOLLOW) {
   // Asking beats waiting. OBS never delivers a mouse event to this page, so
   // the steer gets pulled from stage.py on a timer instead. Whatever stage.py
   // reports drives the lean, which is how Silhouette will steer it later
@@ -1287,7 +1411,7 @@ if (PARALLAX && FOLLOW) {
     setTimeout(tick, 33);
   };
   tick();
-} else if (PARALLAX) {
+} else if (STEERED) {
   addEventListener('pointermove', (e) => {
     wantX = (e.clientX / innerWidth)  * 2 - 1;
     wantY = (e.clientY / innerHeight) * 2 - 1;
@@ -1316,9 +1440,18 @@ renderer.setAnimationLoop((now) => {
   for (const p of pivots) p.rotation.y += step;
 
   if (PLATEMODE) {
-    // Both cameras here are driven straight from numbers, so there is nothing
-    // to integrate each frame. OrbitControls stays out of it entirely: a camera
-    // that can tumble is the wrong tool for judging a shot that cannot.
+    // OrbitControls stays out of it entirely: a camera that can tumble is the
+    // wrong tool for judging a shot that cannot. The only thing that moves the
+    // calibrated camera is the lean, and it moves it off a solved home rather
+    // than replacing it.
+    if (LEANING && leanOn) {
+      // Exponential smoothing keyed off elapsed time, so the lean feels the
+      // same whether the page runs at 60fps or drops frames under stream load.
+      const k = 1 - Math.exp(-EASE * dt);
+      haveX += (wantX - haveX) * k;
+      haveY += (wantY - haveY) * k;
+      leanCamera();
+    }
   } else if (DRAG) {
     controls.update();
   } else if (PARALLAX && framed) {

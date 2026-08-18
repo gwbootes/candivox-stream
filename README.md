@@ -242,10 +242,20 @@ http://localhost:8777/index.html?plate=1&grid=1&bg=1
 ```
 
 The pink rectangle is the desk. Its front and back should sit right on the top
-and bottom of the brown. The teal lines are the floor, and they run well past
-the desk in every direction, because the question is usually where to stand the
-camera rather than where the wood stops. `&floor=40` pulls them in if the wide
-view is distracting.
+and bottom of the brown. The floor runs well past the desk in every direction,
+because the question is usually where to stand the camera rather than where the
+wood stops. `&floor=40` pulls it in if the wide view is distracting, and `H`
+hides the whole thing when you want to look at the models with nothing under
+them.
+
+The floor is painted in the desk's own two browns, `#4D3726` for the lines and
+`#382713` for the surface. Those came out of `desk-v1`'s MagicaVoxel palette
+rather than off a colour picker: 54.5% of the desk's surface is the first one
+and 45.5% is the second. It stands in until the real colours are chosen, and it
+is deliberately unlit, so a model held against it is being held against a flat
+true colour rather than a shaded guess. `&gridcolor=` and `&floorcolor=` take
+any hex when those real colours arrive, and `&fill=0` takes the surface away
+and leaves the lines.
 
 Once it looks right, drop `&bg=1`. The background goes clear again and you put
 the plate behind it in OBS as its own image source.
@@ -385,6 +395,8 @@ and there is no mode to switch.
 | `R` | Backs off until everything is on screen again |
 | `Z` | Flies to the model you last had selected |
 | `C` | Jumps to the real stream shot. Press again to come back |
+| `H` | Hides the floor and the grid. Press again to bring them back |
+| `P` | Leans the shot with your mouse. Press again to park it |
 
 `R` does the same harmless thing whether or not you are holding a model, because
 it sits right next to `C` and `C` is the one you reach for all evening. The key
@@ -422,6 +434,35 @@ back, so the shot you find is the shot that goes out.
 
 The calibrated position sits almost level with the desk lip, because that is
 where the plate's own camera was. Treat it as a starting point.
+
+### Making the shot lean
+
+The stream camera drifts a short way with whatever is steering it, so the set
+has depth instead of sitting there like a photograph. Your mouse steers it on
+this page. In OBS, `&follow=1` steers it from `stage.py`, which is the same
+hook Silhouette will use to steer it from a PNGTuber's position later.
+
+Press `P` in the editor to watch it. It stays parked until you ask, because a
+camera that drifts while you are dragging a model is a camera fighting you.
+
+The camera **travels** rather than turning on the spot. A camera that turns
+where it stands moves everything in frame by the same amount, which reads dead
+flat. Travelling makes the near models slide across the far ones by real
+parallax, and that is the whole effect. Measured on this set at full steer, the
+gacha at the front of the desk crosses 149 pixels one way while the bowl on the
+rack behind it crosses 131 pixels the *other* way.
+
+That crossover is what `leanpivot` sets. Everything nearer than it slides one
+way, everything further slides the other, and whatever sits exactly at it stays
+put. The default of `6` puts the still point at the PC monitor, so the chat
+stays easy to read while the desk moves around it.
+
+`leanlock` decides how much of the framing is held. At `1` the set stays where
+you framed it and you get pure parallax. At `0` the whole shot drifts with the
+steer. The default `0.85` is most of the way to held, which matters on this set
+because the crops at the frame edges are deliberate and a camera that wandered
+would undo them. Turn `lean` down to `0.2` for something barely there, or up to
+`0.6` if it should be obvious. `lean=0` switches it off.
 
 **Moving a model:**
 
@@ -538,6 +579,13 @@ Join them with `&`. Like this: `?model=models/tv.obj&spin=8&pitch=20`
 | `debug` | `0` | Set to `1` to see the floor and a dark backdrop |
 | `parallax` | `0` | Degrees it leans toward your mouse. `0` turns it off |
 | `ease` | `4` | How fast the lean catches up. Lower is floatier |
+| `lean` | `0.35` | How far the stream camera travels at full steer. `0` turns it off |
+| `leanlock` | `0.85` | `1` holds the framing still, `0` lets the whole shot drift |
+| `leanpivot` | `6` | The depth that stays put while everything else slides |
+| `leany` | `0.16` | Vertical travel. Defaults to under half the sideways one |
+| `gridcolor` | `4D3726` | The grid lines. The desk's lighter brown |
+| `floorcolor` | `382713` | The solid floor. The desk's darker brown |
+| `fill` | `1` | `0` leaves the grid lines with nothing behind them |
 
 **To pose one by hand:** add `drag=1&spin=0`. Right-click the source in OBS and pick
 **Interact**. Drag it until it looks good. Then write those angles into `yaw` and `pitch`.
