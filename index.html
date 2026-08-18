@@ -712,7 +712,12 @@ async function boot() {
     }
   }
 
-  if (q.get('gallery') === '1') {
+  // The editor needs the whole set on hand, since its entire job is deciding
+  // what goes where. Asking for it without naming any models means all of them.
+  const wantAll = q.get('gallery') === '1'
+    || (EDIT && !q.get('models') && !q.get('model'));
+
+  if (wantAll) {
     // A browser cannot list a folder, so the set is declared in manifest.json.
     // Re-run make-manifest.bat after exporting new models.
     try {
