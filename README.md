@@ -436,6 +436,9 @@ where the plate's own camera was. Treat it as a starting point.
 | `PgUp` and `PgDn` | Floats it above the desk |
 | `F` | Drops it back onto the desk |
 | `V` | Hides it from the live page |
+| `,` and `.` | Leans it toward the camera and away |
+| `N` and `M` | Leans it left and right |
+| `G` | Stands it back up straight |
 | `D` | Stands another one of these on the desk |
 | `Del` | Removes a copy |
 | `Shift`+`R` | Starts that one over |

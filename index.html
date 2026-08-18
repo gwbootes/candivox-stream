@@ -501,7 +501,11 @@ const placed = [];        // every loaded entry, in load order
 let   layoutData = {};    // path -> transform, as read from and written to disk
 let   stagingReach = 0;   // how far the unplaced pile extends, for framing it
 
-const defaultTf = () => ({ x: 0, z: -(PLATE.nearZ + PLATE.depth / 2), ry: YAW, s: 1, lift: 0 });
+const defaultTf = () => ({
+  x: 0, z: -(PLATE.nearZ + PLATE.depth / 2), ry: YAW, s: 1, lift: 0,
+  rx: 0,   // leans toward the camera and away, degrees
+  rz: 0,   // leans left and right
+});
 
 // Push an entry's numbers onto its pivot. The single place any model moves.
 function applyTf(e) {
@@ -512,7 +516,19 @@ function applyTf(e) {
   // stored scale meaning "how much bigger than normal", so a saved layout does
   // not shift the moment even= is turned on or off.
   e.pivot.scale.setScalar(t.s * (e.baseScale || 1));
-  e.pivot.rotation.y = THREE.MathUtils.degToRad(t.ry);
+  // YXZ turns the model about the upright axis first and only then leans it,
+  // which is the order a hand expects. The default XYZ tilts the axis the
+  // turn happens around, so turning a leaning model swings it through an arc
+  // instead of spinning it where it stands.
+  e.pivot.rotation.order = 'YXZ';
+  e.pivot.rotation.set(
+    THREE.MathUtils.degToRad(t.rx || 0),
+    THREE.MathUtils.degToRad(t.ry),
+    THREE.MathUtils.degToRad(t.rz || 0)
+  );
+  // Height stays measured from the upright model, so a lean pivots about the
+  // middle and leaves the footprint where it was. Anything propped against
+  // something else wants a small lift afterwards regardless.
   e.pivot.position.set(t.x, (e.size.y * t.s) / 2 + t.lift, t.z);
   // Hiding is for the live page. Inside the editor a hidden model stays on
   // screen, or there would be no way to click it and bring it back.
@@ -991,6 +1007,13 @@ function startEditor() {
       case 'PageDown': t.lift -= step(ev, 0.05); break;
       case 'f': case 'F': t.lift = 0; break;
       case 'v': case 'V': t.hidden = !t.hidden; break;
+      // Leaning. A tamagotchi propped against a stack of tapes needs both of
+      // these and then a nudge of lift to settle it back onto the wood.
+      case ',': case '<': t.rx = (t.rx || 0) - step(ev, 2); break;
+      case '.': case '>': t.rx = (t.rx || 0) + step(ev, 2); break;
+      case 'n': case 'N': t.rz = (t.rz || 0) - step(ev, 2); break;
+      case 'm': case 'M': t.rz = (t.rz || 0) + step(ev, 2); break;
+      case 'g': case 'G': t.rx = 0; t.rz = 0; break;
       default: return;
     }
     ev.preventDefault();
@@ -1005,6 +1028,8 @@ function startEditor() {
         x:    +e.tf.x.toFixed(4),
         z:    +e.tf.z.toFixed(4),
         ry:   +e.tf.ry.toFixed(2),
+        rx:   +(e.tf.rx || 0).toFixed(2),
+        rz:   +(e.tf.rz || 0).toFixed(2),
         s:    +e.tf.s.toFixed(4),
         lift: +e.tf.lift.toFixed(4),
         hidden: !!e.tf.hidden,
@@ -1071,12 +1096,16 @@ function startEditor() {
     hud.innerHTML =
       `<b>${sel.path.replace(/^models\//, '')}</b>${t.hidden ? '  <i>(hidden)</i>' : ''}\n` +
       `x ${t.x.toFixed(2)}   z ${t.z.toFixed(2)}   turn ${t.ry.toFixed(0)}°\n` +
-      `scale ${t.s.toFixed(3)}   lift ${t.lift.toFixed(2)}\n\n` +
+      `scale ${t.s.toFixed(3)}   lift ${t.lift.toFixed(2)}` +
+      ((t.rx || t.rz) ? `   lean ${(t.rx || 0).toFixed(0)}°/${(t.rz || 0).toFixed(0)}°` : '') +
+      `\n\n` +
       `<i>drag it   move on the desk (Shift snaps)\n` +
       `[  ]      smaller / bigger\n` +
       `Q  E      turn        arrows  nudge\n` +
       `PgUp/Dn   lift        F       back down to the desk\n` +
       `V         hide from the live page\n` +
+      `,  .      lean toward and away   N  M  lean left and right\n` +
+      `G         stand it back up straight\n` +
       `D         stand another one of these on the desk\n` +
       `Del       remove a copy   Shift+R  start this one over\n` +
       `R         see everything again    Tab  next\n` +
