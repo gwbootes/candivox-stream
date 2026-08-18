@@ -75,9 +75,20 @@ const DRAG  = q.get('drag') === '1';
 const DEBUG = q.get('debug') === '1';
 const PARA  = num('parallax', 0);
 const EASE  = num('ease', 4);
+const FOV   = num('fov', 35);
+
+const SWAY   = num('sway', 0);
+const SWAYHZ = num('swayspeed', 0.09);
 
 // Hand orbiting and pointer-lean both want the mouse, so drag wins outright.
 const PARALLAX = PARA > 0 && !DRAG;
+// An OBS Browser source never receives mouse movement, so sway drives the same
+// camera lean off a clock instead. It only takes over when nothing else wants
+// the camera.
+const SWAYING  = SWAY > 0 && !DRAG && !PARALLAX;
+// Whichever mode is live owns the swing, measured in degrees either way.
+const SWING    = PARALLAX ? PARA : (SWAYING ? SWAY : 0);
+
 if (!DRAG) document.documentElement.classList.add('hide-cursor');
 
 const fail = (msg) => {
@@ -87,7 +98,7 @@ const fail = (msg) => {
 };
 
 const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100000);
+const camera   = new THREE.PerspectiveCamera(FOV, innerWidth / innerHeight, 0.1, 100000);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
@@ -117,6 +128,17 @@ const pivots = [];   // one per model; each spins about its own middle
 // of nudging the camera in place, so nearer models swing further across the
 // frame than distant ones and the row gains real depth.
 let baseDist = 0, basePitch = 0, framed = false;
+let fitW = 0, fitH = 0;   // world-space extents the camera has to cover
+
+// Pointer position as -1..1 from the middle of the window. `want` is where the
+// camera is being asked to look; `have` chases it, which is what turns a jumpy
+// cursor into a slow lean. Declared up here so placeCamera() can read them.
+let wantX = 0, wantY = 0, haveX = 0, haveY = 0;
+let swayT = 0;   // seconds elapsed, drives the automatic lean
+
+// Breathing room around the framed set. Kept tight because every percent of
+// padding is a percent the models shrink by.
+const PAD = 1.08;
 
 // MagicaVoxel writes its palette as a tiny image — often a single row of
 // colour swatches. Three's default linear filtering blends neighbouring
@@ -218,20 +240,57 @@ function layout(entries) {
     pivots.push(entries[i].pivot);
   }
 
-  const height = Math.max(...entries.map(e => e.size.y));
-  const span   = Math.max(total, height) || 1;
-  const dist   = (span / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2))) * 1.25 * ZOOM;
-  const rad    = THREE.MathUtils.degToRad(PITCH);
-  camera.position.set(0, Math.sin(rad) * dist, Math.cos(rad) * dist);
-  camera.near = Math.max(dist / 1000, 0.01);
-  camera.far  = dist * 100;
-  camera.updateProjectionMatrix();
+  fitW      = total || 1;
+  fitH      = Math.max(...entries.map(e => e.size.y)) || 1;
+  basePitch = THREE.MathUtils.degToRad(PITCH);
+  framed    = true;
+  refit();
+
   controls.target.set(0, 0, 0);
   controls.update();
+}
 
-  baseDist  = dist;
-  basePitch = rad;
-  framed    = true;
+// Three's `fov` is the VERTICAL angle. A row of models is a horizontal span, so
+// measuring it against the vertical angle pulls the camera back by roughly the
+// aspect ratio further than needed and the models come out tiny on a widescreen
+// canvas. Width is checked against the horizontal angle, height against the
+// vertical one, and whichever needs more room decides the distance.
+function refit() {
+  if (!framed) return;
+  const halfV = THREE.MathUtils.degToRad(camera.fov) / 2;
+  const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+
+  baseDist = Math.max(
+    (fitW / 2) / Math.tan(halfH),
+    (fitH / 2) / Math.tan(halfV)
+  ) * PAD * ZOOM;
+
+  camera.near = Math.max(baseDist / 1000, 0.01);
+  camera.far  = baseDist * 100;
+  camera.updateProjectionMatrix();
+  placeCamera();
+}
+
+// Position the camera on its orbit, offset by however far the pointer-lean has
+// currently travelled. Called on every frame that parallax is running, and once
+// per reframe so a resize lands the camera in the right place immediately.
+function placeCamera() {
+  const swing = THREE.MathUtils.degToRad(SWING);
+  const yaw   = haveX * swing;
+  // Vertical travel is damped and clamped: swinging the camera under the floor
+  // or straight overhead looks broken rather than responsive.
+  const pitch = THREE.MathUtils.clamp(
+    basePitch - haveY * swing * 0.6,
+    THREE.MathUtils.degToRad(-25),
+    THREE.MathUtils.degToRad(75)
+  );
+
+  camera.position.set(
+    Math.sin(yaw) * Math.cos(pitch) * baseDist,
+    Math.sin(pitch) * baseDist,
+    Math.cos(yaw) * Math.cos(pitch) * baseDist
+  );
+  camera.lookAt(0, 0, 0);
 }
 
 async function boot() {
@@ -270,11 +329,6 @@ async function boot() {
   if (bad.length) console.warn('[candivox] models that failed to load:\n' + bad.join('\n'));
 }
 
-// Pointer position as -1..1 from the middle of the window. `want` is where the
-// camera is being asked to look; `have` chases it, which is what turns a jumpy
-// cursor into a slow lean.
-let wantX = 0, wantY = 0, haveX = 0, haveY = 0;
-
 if (PARALLAX) {
   addEventListener('pointermove', (e) => {
     wantX = (e.clientX / innerWidth)  * 2 - 1;
@@ -287,8 +341,11 @@ if (PARALLAX) {
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  // The framing depends on aspect now, so a resize has to re-measure rather
+  // than just stretch. Resizing an OBS source counts as a resize.
+  camera.updateProjectionMatrix();
+  refit();
 });
 
 addEventListener('error', (e) => fail(`Script error:\n${e.message}`));
@@ -307,23 +364,16 @@ renderer.setAnimationLoop((now) => {
     const k = 1 - Math.exp(-EASE * dt);
     haveX += (wantX - haveX) * k;
     haveY += (wantY - haveY) * k;
-
-    const swing = THREE.MathUtils.degToRad(PARA);
-    const yaw   = haveX * swing;
-    // Vertical travel is halved and clamped: swinging the camera under the
-    // floor or straight overhead looks broken rather than responsive.
-    const pitch = THREE.MathUtils.clamp(
-      basePitch - haveY * swing * 0.5,
-      THREE.MathUtils.degToRad(-25),
-      THREE.MathUtils.degToRad(75)
-    );
-
-    camera.position.set(
-      Math.sin(yaw) * Math.cos(pitch) * baseDist,
-      Math.sin(pitch) * baseDist,
-      Math.cos(yaw) * Math.cos(pitch) * baseDist
-    );
-    camera.lookAt(0, 0, 0);
+    placeCamera();
+  } else if (SWAYING && framed) {
+    // Two sine waves at different rates, so the camera traces a slow figure
+    // eight and never visibly repeats a straight back-and-forth. The vertical
+    // one runs slower and shallower because height reads stronger on screen.
+    swayT += dt;
+    const w = swayT * SWAYHZ * Math.PI * 2;
+    haveX = Math.sin(w);
+    haveY = Math.sin(w * 0.5) * 0.6;
+    placeCamera();
   }
 
   renderer.render(scene, camera);

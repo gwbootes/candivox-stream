@@ -121,33 +121,66 @@ on and they all match, which is easier to look at when one is huge and one is ti
 
 ## Step 5. Make it lean toward your mouse
 
-Add `&parallax=10`. Now the whole row tilts toward wherever your pointer is.
+Add `&parallax=25`. Now the whole row tilts toward wherever your pointer is.
 Move left, it leans left. It drifts back to the middle when your mouse leaves.
 
 The mouse pointer is hidden already. You do not have to do anything for that.
 
 ```
-https://gwbootes.github.io/candivox-stream/?gallery=1&spin=15&parallax=10
+https://gwbootes.github.io/candivox-stream/?gallery=1&spin=15&parallax=25
 ```
 
-**Read this part before you count on it.**
+**This will not work in OBS. Read this part.**
 
-An OBS Browser source does not get mouse movement. OBS only passes your mouse
-through when you right-click the source and pick **Interact**. So on stream,
-the lean will sit still and do nothing.
+An OBS Browser source never gets your mouse. OBS only passes the mouse through
+while you right-click the source and pick **Interact**, and that is a popup
+window you have to be clicking inside of. On stream the lean sits dead still.
 
-Where it does work: a real browser window. Open the link, press **F11** for
-fullscreen, and capture that window in OBS. Then it follows your mouse.
+This is a limit in OBS. No setting fixes it.
+
+So use `parallax` for a browser window on your own screen, and use `sway`
+below for anything going on stream.
 
 Two knobs:
 
 | Setting | Normal | What it does |
 |---|---|---|
-| `parallax` | `0` | How far it leans, in degrees. Try `6` to `15`. `0` turns it off |
+| `parallax` | `0` | How far it leans, in degrees. Try `15` to `45`. `0` turns it off |
 | `ease` | `4` | How fast it catches up. Lower is slower and floatier |
+
+| `sway` | `0` | Automatic lean, in degrees. Works in OBS. `0` turns it off |
+| `swayspeed` | `0.09` | How fast the automatic lean travels, in laps per second |
+
+There is no upper limit on `parallax` or `sway`. Past about `50` they start
+swinging around behind the models, which is a real look if you want it.
 
 `drag=1` turns the lean off and gives you the mouse pointer back. You cannot
 have both, since they both want the mouse.
+
+---
+
+## Step 6. The version that works on stream
+
+`sway` does the same lean, driven by a clock instead of your mouse. It needs
+no input, so OBS cannot get in the way of it.
+
+```
+https://gwbootes.github.io/candivox-stream/?gallery=1&spin=15&sway=25
+```
+
+The camera traces a slow figure eight. It never repeats a flat back-and-forth,
+so it reads as alive rather than as a loop.
+
+| Setting | Normal | What it does |
+|---|---|---|
+| `sway` | `0` | How far it leans, in degrees. Try `15` to `35`. `0` turns it off |
+| `swayspeed` | `0.09` | Laps per second. Higher is faster. `0.05` is very slow |
+
+`parallax` wins if you set both. Sway only runs when nothing else is steering.
+
+**Start slow.** Motion behind you on stream pulls the eye hard. `sway=20` with
+the normal speed is about one full drift every eleven seconds, which is enough
+to feel three-dimensional without stealing attention from you.
 
 ---
 
@@ -164,6 +197,7 @@ Join them with `&`. Like this: `?model=models/tv.obj&spin=8&pitch=20`
 | `yaw` | `0` | Which way it faces at the start |
 | `pitch` | `14` | How high up you look from |
 | `zoom` | `1` | Under 1 moves closer. Over 1 moves back |
+| `fov` | `35` | Lens angle. Lower flattens the row out. Higher exaggerates depth |
 | `drag` | `0` | Set to `1` to turn it with your mouse. Brings the pointer back |
 | `debug` | `0` | Set to `1` to see the floor and a dark backdrop |
 | `parallax` | `0` | Degrees it leans toward your mouse. `0` turns it off |
