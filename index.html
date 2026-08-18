@@ -9,6 +9,11 @@
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
   canvas { display: block; background: transparent; }
 
+  /* The pointer is hidden by default so a fullscreen browser window reads as
+     a clean plate. Adding drag=1 puts it back, because posing a model by hand
+     is impossible without seeing where you are grabbing. */
+  html.hide-cursor, html.hide-cursor * { cursor: none; }
+
   /* Only ever visible while something is wrong. A silent black rectangle in
      OBS is indistinguishable from a broken source, so failures must speak. */
   #err {
@@ -54,6 +59,9 @@ import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
 //   even   1 rescales every model to the same height
 //   drag   1 allows mouse orbit (needs OBS "Interact")
 //   debug  1 paints a dark backdrop and a grid so you can see the stage
+//
+//   parallax  degrees the camera leans toward the pointer (0 disables)
+//   ease      how fast that lean catches up; lower is floatier
 // ---------------------------------------------------------------------------
 const q     = new URLSearchParams(location.search);
 const num   = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) ? v : d; };
@@ -65,6 +73,12 @@ const GAP   = num('gap', 0.25);
 const EVEN  = q.get('even') === '1';
 const DRAG  = q.get('drag') === '1';
 const DEBUG = q.get('debug') === '1';
+const PARA  = num('parallax', 0);
+const EASE  = num('ease', 4);
+
+// Hand orbiting and pointer-lean both want the mouse, so drag wins outright.
+const PARALLAX = PARA > 0 && !DRAG;
+if (!DRAG) document.documentElement.classList.add('hide-cursor');
 
 const fail = (msg) => {
   const el = document.getElementById('err');
@@ -98,6 +112,11 @@ controls.enableDamping = true;
 controls.enabled = DRAG;
 
 const pivots = [];   // one per model; each spins about its own middle
+
+// Where layout() parked the camera. Pointer-lean orbits around these instead
+// of nudging the camera in place, so nearer models swing further across the
+// frame than distant ones and the row gains real depth.
+let baseDist = 0, basePitch = 0, framed = false;
 
 // MagicaVoxel writes its palette as a tiny image — often a single row of
 // colour swatches. Three's default linear filtering blends neighbouring
@@ -209,6 +228,10 @@ function layout(entries) {
   camera.updateProjectionMatrix();
   controls.target.set(0, 0, 0);
   controls.update();
+
+  baseDist  = dist;
+  basePitch = rad;
+  framed    = true;
 }
 
 async function boot() {
@@ -247,6 +270,21 @@ async function boot() {
   if (bad.length) console.warn('[candivox] models that failed to load:\n' + bad.join('\n'));
 }
 
+// Pointer position as -1..1 from the middle of the window. `want` is where the
+// camera is being asked to look; `have` chases it, which is what turns a jumpy
+// cursor into a slow lean.
+let wantX = 0, wantY = 0, haveX = 0, haveY = 0;
+
+if (PARALLAX) {
+  addEventListener('pointermove', (e) => {
+    wantX = (e.clientX / innerWidth)  * 2 - 1;
+    wantY = (e.clientY / innerHeight) * 2 - 1;
+  });
+  // Drift back to centre when the pointer leaves, so the scene never parks
+  // at a hard angle just because the mouse went to another monitor.
+  addEventListener('pointerleave', () => { wantX = 0; wantY = 0; });
+}
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -260,7 +298,34 @@ renderer.setAnimationLoop((now) => {
   const dt = (now - last) / 1000; last = now;
   const step = THREE.MathUtils.degToRad(SPIN) * dt;
   for (const p of pivots) p.rotation.y += step;
-  controls.update();
+
+  if (DRAG) {
+    controls.update();
+  } else if (PARALLAX && framed) {
+    // Exponential smoothing keyed off elapsed time, so the lean feels the same
+    // whether the page is running at 60fps or dropping frames under stream load.
+    const k = 1 - Math.exp(-EASE * dt);
+    haveX += (wantX - haveX) * k;
+    haveY += (wantY - haveY) * k;
+
+    const swing = THREE.MathUtils.degToRad(PARA);
+    const yaw   = haveX * swing;
+    // Vertical travel is halved and clamped: swinging the camera under the
+    // floor or straight overhead looks broken rather than responsive.
+    const pitch = THREE.MathUtils.clamp(
+      basePitch - haveY * swing * 0.5,
+      THREE.MathUtils.degToRad(-25),
+      THREE.MathUtils.degToRad(75)
+    );
+
+    camera.position.set(
+      Math.sin(yaw) * Math.cos(pitch) * baseDist,
+      Math.sin(pitch) * baseDist,
+      Math.cos(yaw) * Math.cos(pitch) * baseDist
+    );
+    camera.lookAt(0, 0, 0);
+  }
+
   renderer.render(scene, camera);
 });
 

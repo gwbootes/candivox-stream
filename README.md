@@ -38,15 +38,25 @@ file, so nothing can go missing. The page opens `.obj`, `.glb`, and `.gltf`.
 
 ---
 
-## Step 2. Start the little server
+## Step 2. Pick where you load it from
 
-Double-click **`serve.bat`**. A black window opens. Leave it open.
+This page is live on the web already:
 
-You need this. Here is why. When a web page is opened straight off your hard drive,
-the browser will not let it load other files next to it. The page shows up fine and the
-model never arrives. Serving the folder over `localhost` gets rid of that rule.
+```
+https://gwbootes.github.io/candivox-stream/
+```
 
-To stop it, close the black window.
+Use that and there is nothing to start up. It just works.
+
+**The local way, if you want it.** Double-click **`serve.bat`**. A black window
+opens. Leave it open. Then use `http://localhost:8777/index.html` instead.
+
+Use the local way when you are testing new models and have not pushed them yet,
+or when your internet is down.
+
+Do not open `index.html` by double-clicking it. A page opened straight off your
+hard drive is not allowed to load the model files next to it. The page comes up
+fine and the model never arrives.
 
 ## Step 3. Put it in OBS
 
@@ -57,13 +67,13 @@ To stop it, close the black window.
 5. Leave **Shutdown source when not visible** unticked. Otherwise it reloads every time you switch scenes.
 
 ```
-http://localhost:8777/index.html?model=models/television.obj&spin=8
+https://gwbootes.github.io/candivox-stream/?model=models/television.obj&spin=8
 ```
 
 Try it right now with the test cube. This should show a spinning teal box on a grid:
 
 ```
-http://localhost:8777/index.html?model=models/test-cube.obj&debug=1&spin=20
+https://gwbootes.github.io/candivox-stream/?model=models/test-cube.obj&debug=1&spin=20
 ```
 
 If the cube spins, everything works and your own models will too.
@@ -73,21 +83,28 @@ If the cube spins, everything works and your own models will too.
 This puts every model in a row, side by side, each one turning on its own spot:
 
 ```
-http://localhost:8777/index.html?gallery=1&spin=15
+https://gwbootes.github.io/candivox-stream/?gallery=1&spin=15
 ```
 
 Add `&debug=1` while you set it up so you can see the floor. Take it off before you stream.
 
-**After you export new models, double-click `make-manifest.bat`.**
+**After you export new models, do two things.**
 
-Here is why. A web page is not allowed to look inside a folder and see what's
-there. So the list of models is written down in `models/manifest.json`, and that
-batch file writes it. New models will not show up until you run it.
+1. Double-click **`make-manifest.bat`**.
+2. Push the new files to GitHub.
+
+Here is why step 1 matters. A web page is not allowed to look inside a folder
+and see what's there. So the list of models is written down in
+`models/manifest.json`, and that batch file writes it. New models will not show
+up until you run it.
+
+Step 2 matters because the live page reads from GitHub. A model sitting only on
+your hard drive is invisible to it.
 
 Want only a few of them? List them yourself and skip the manifest:
 
 ```
-http://localhost:8777/index.html?models=models/tv.obj,models/gacha.obj
+https://gwbootes.github.io/candivox-stream/?models=models/tv.obj,models/gacha.obj
 ```
 
 Two extra settings for rows:
@@ -99,6 +116,38 @@ Two extra settings for rows:
 
 Leave `even` off and the models keep their real sizes next to each other. Turn it
 on and they all match, which is easier to look at when one is huge and one is tiny.
+
+---
+
+## Step 5. Make it lean toward your mouse
+
+Add `&parallax=10`. Now the whole row tilts toward wherever your pointer is.
+Move left, it leans left. It drifts back to the middle when your mouse leaves.
+
+The mouse pointer is hidden already. You do not have to do anything for that.
+
+```
+https://gwbootes.github.io/candivox-stream/?gallery=1&spin=15&parallax=10
+```
+
+**Read this part before you count on it.**
+
+An OBS Browser source does not get mouse movement. OBS only passes your mouse
+through when you right-click the source and pick **Interact**. So on stream,
+the lean will sit still and do nothing.
+
+Where it does work: a real browser window. Open the link, press **F11** for
+fullscreen, and capture that window in OBS. Then it follows your mouse.
+
+Two knobs:
+
+| Setting | Normal | What it does |
+|---|---|---|
+| `parallax` | `0` | How far it leans, in degrees. Try `6` to `15`. `0` turns it off |
+| `ease` | `4` | How fast it catches up. Lower is slower and floatier |
+
+`drag=1` turns the lean off and gives you the mouse pointer back. You cannot
+have both, since they both want the mouse.
 
 ---
 
@@ -115,8 +164,10 @@ Join them with `&`. Like this: `?model=models/tv.obj&spin=8&pitch=20`
 | `yaw` | `0` | Which way it faces at the start |
 | `pitch` | `14` | How high up you look from |
 | `zoom` | `1` | Under 1 moves closer. Over 1 moves back |
-| `drag` | `0` | Set to `1` to turn it with your mouse |
+| `drag` | `0` | Set to `1` to turn it with your mouse. Brings the pointer back |
 | `debug` | `0` | Set to `1` to see the floor and a dark backdrop |
+| `parallax` | `0` | Degrees it leans toward your mouse. `0` turns it off |
+| `ease` | `4` | How fast the lean catches up. Lower is floatier |
 
 **To pose one by hand:** add `drag=1&spin=0`. Right-click the source in OBS and pick
 **Interact**. Drag it until it looks good. Then write those angles into `yaw` and `pitch`.
