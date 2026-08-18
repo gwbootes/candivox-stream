@@ -391,6 +391,23 @@ side and it will not roll over, on purpose: the stream camera cannot do those
 things either, and a shot judged through a camera that can is a shot you cannot
 actually have.
 
+### Seeing the real frame
+
+Press **F11**. The browser gives the page every pixel of the screen, and F11
+again brings the menus back.
+
+That matters more than it looks. The editor already crops the canvas to 16:9,
+which is the shape OBS renders at, and greys out the rest of the window. Without
+that crop a wide browser window shows more to the left and right than the stream
+ever will, because the camera's vertical angle is fixed and the extra width comes
+free. Anything placed near an edge would then be placed in a frame that does not
+exist.
+
+The corner panel reports the frame size as you go, so you can see when you have
+the full 1920 across. `&ratio=0` turns the crop off, and `&ratio=1.6` sets a
+different shape if the stream is ever not 16:9. Live sources never get cropped:
+OBS has already sized them.
+
 **`C` and the stream camera.** `C` puts you exactly where OBS will be. Every
 control above still works there, so you can raise it, back it off, and tilt it
 until the desk reads the way you want. The corner panel shows the height, the

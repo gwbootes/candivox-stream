@@ -9,6 +9,15 @@
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
   canvas { display: block; background: transparent; }
 
+  /* The editor pins the canvas to the stream's own 16:9 shape and centres it,
+     so the bars either side are the parts of the window OBS will never see.
+     Live sources are sized by OBS and never take this class. */
+  body.boxed canvas {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    outline: 1px solid rgba(0, 255, 200, .25);
+  }
+  body.boxed { background: #0a0d10; }
+
   /* The pointer is hidden by default so a fullscreen browser window reads as
      a clean plate. Adding drag=1 puts it back, because posing a model by hand
      is impossible without seeing where you are grabbing. */
@@ -179,6 +188,38 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.setClearColor(0x000000, 0);   // the 0 alpha is what OBS keys on
 document.body.appendChild(renderer.domElement);
+
+// ---------------------------------------------------------------------------
+// The canvas is shaped like the stream, not like the window.
+//
+// OBS renders this at 16:9. A browser window is almost never 16:9, and the
+// camera's vertical angle is fixed, so a wider window quietly shows more to the
+// left and right than the stream ever will. Every judgement about what sits
+// near an edge is then made on a frame that does not exist. The editor pins the
+// canvas to the real shape and greys out the rest of the window.
+//
+// ratio=0 turns it off. Live sources never get it at all, because OBS has
+// already sized the source and a second opinion would only fight it.
+// ---------------------------------------------------------------------------
+const RATIO = q.get('ratio') === '0' ? 0 : num('ratio', 16 / 9);
+const BOXED = EDIT && RATIO > 0;
+if (BOXED) document.body.classList.add('boxed');
+
+function resize() {
+  let w = innerWidth, h = innerHeight;
+  if (BOXED) {
+    if (w / h > RATIO) w = Math.round(h * RATIO);
+    else               h = Math.round(w / RATIO);
+  }
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+resize();
+
+// Pointer maths has to measure the canvas rather than the window, or every ray
+// lands somewhere other than where the cursor is the moment the two differ.
+const view2d = () => renderer.domElement.getBoundingClientRect();
 
 if (DEBUG) {
   renderer.setClearColor(0x141018, 1);
@@ -633,24 +674,28 @@ function startEditor() {
   function unitsPerPixel() {
     const cam = active();
     const reach = Math.max(2, Math.hypot(cam.y, cam.z + PLATE.nearZ + PLATE.depth / 2));
-    return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * reach / innerHeight;
+    return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * reach / view2d().height;
   }
 
   // Where the pointer meets the desk surface, in world units. Returns false
   // when the ray goes above the horizon and never touches the plane.
+  // Screen pixels to the -1..1 the raycaster wants, measured off the canvas so
+  // it stays right when the canvas is smaller than the window.
+  const ndc = (ev) => {
+    const r = view2d();
+    return new THREE.Vector2(
+      ((ev.clientX - r.left) / r.width) * 2 - 1,
+      -((ev.clientY - r.top) / r.height) * 2 + 1
+    );
+  };
+
   const onDesk = (ev) => {
-    ray.setFromCamera(new THREE.Vector2(
-      (ev.clientX / innerWidth) * 2 - 1,
-      -(ev.clientY / innerHeight) * 2 + 1
-    ), camera);
+    ray.setFromCamera(ndc(ev), camera);
     return ray.ray.intersectPlane(ground, hit) !== null;
   };
 
   const pick = (ev) => {
-    ray.setFromCamera(new THREE.Vector2(
-      (ev.clientX / innerWidth) * 2 - 1,
-      -(ev.clientY / innerHeight) * 2 + 1
-    ), camera);
+    ray.setFromCamera(ndc(ev), camera);
     for (const h of ray.intersectObjects(placed.map(e => e.pivot), true)) {
       const e = placed.find(p => p.path === h.object.userData.path);
       if (e) return e;
@@ -891,7 +936,10 @@ function startEditor() {
           ? `<b>STREAM CAMERA</b>  <i>the real shot</i>\n`
           : `<b>CANDIVOX PLACEMENT</b>  ${n}/${placed.length} placed\n`) +
         `height ${cam.y.toFixed(2)}   across ${cam.x.toFixed(2)}   ` +
-        `back ${cam.z.toFixed(2)}   tilt ${((streamView ? PLATE.pitch : 0) + cam.pitch).toFixed(1)}°\n\n` +
+        `back ${cam.z.toFixed(2)}   tilt ${((streamView ? PLATE.pitch : 0) + cam.pitch).toFixed(1)}°\n` +
+        `<i>frame ${view2d().width.toFixed(0)}x${view2d().height.toFixed(0)}` +
+        `${BOXED ? '  locked to the stream shape' : '  window shape, not the stream'}` +
+        `${BOXED && view2d().width < 1920 ? '. F11 for the full 1920' : ''}</i>\n\n` +
         `<i>click a model to pick it up, or Tab through them\n` +
         `drag empty space   move yourself around\n` +
         `wheel              walk in and out\n` +
@@ -922,6 +970,8 @@ function startEditor() {
   }
 
   draw();
+  // Going fullscreen changes the frame, and the panel is reporting its size.
+  onResize = draw;
 
   // diag=1 fires a synthetic pick at a spread of screen points and reports what
   // came back. Headless Chrome cannot click, so this is the only way to prove
@@ -958,10 +1008,11 @@ function startEditor() {
     const target = placed[1];
     const world  = target.pivot.position.clone();
     const proj   = world.clone().project(camera);
-    const sx = (proj.x + 1) / 2 * innerWidth;
-    const sy = (-proj.y + 1) / 2 * innerHeight;
-    const onScreen = sx >= 0 && sx <= innerWidth && sy >= 0 && sy <= innerHeight;
-    lines.push(`\nwindow ${innerWidth}x${innerHeight}  aspect ${camera.aspect.toFixed(2)}`);
+    const r  = view2d();
+    const sx = r.left + (proj.x + 1) / 2 * r.width;
+    const sy = r.top + (-proj.y + 1) / 2 * r.height;
+    const onScreen = sx >= r.left && sx <= r.right && sy >= r.top && sy <= r.bottom;
+    lines.push(`\nwindow ${innerWidth}x${innerHeight}  canvas ${r.width.toFixed(0)}x${r.height.toFixed(0)}  aspect ${camera.aspect.toFixed(2)}`);
     lines.push(`target ${target.path.slice(-22)} projects to ${sx.toFixed(0)},${sy.toFixed(0)}  ${onScreen ? 'ON SCREEN' : 'OFF SCREEN'}`);
 
     // How many of the whole set land inside the window is the number that
@@ -969,8 +1020,7 @@ function startEditor() {
     let visible = 0;
     for (const e of placed) {
       const p = e.pivot.position.clone().project(camera);
-      const ex = (p.x + 1) / 2 * innerWidth, ey = (-p.y + 1) / 2 * innerHeight;
-      if (ex >= 0 && ex <= innerWidth && ey >= 0 && ey <= innerHeight && p.z < 1) visible++;
+      if (p.x >= -1 && p.x <= 1 && p.y >= -1 && p.y <= 1 && p.z < 1) visible++;
     }
     lines.push(`${visible}/${placed.length} models inside the window`);
     lines.push(`pick there = ${pick({ clientX: sx, clientY: sy })?.path?.slice(-22) || 'NULL'}`);
@@ -1093,13 +1143,14 @@ if (PARALLAX && FOLLOW) {
   addEventListener('pointerleave', () => { wantX = 0; wantY = 0; });
 }
 
+let onResize = () => {};
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  renderer.setSize(innerWidth, innerHeight);
   // The framing depends on aspect now, so a resize has to re-measure rather
-  // than just stretch. Resizing an OBS source counts as a resize.
-  camera.updateProjectionMatrix();
+  // than just stretch. Resizing an OBS source counts as a resize, and so does
+  // going fullscreen, which is the whole reason the editor watches for it.
+  resize();
   refit();
+  onResize();
 });
 
 addEventListener('error', (e) => fail(`Script error:\n${e.message}`));
