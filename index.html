@@ -149,7 +149,18 @@ const PLATEMODE = q.get('plate') === '1' || EDIT;
 const GRID      = q.get('grid') === '1' || (EDIT && q.get('grid') !== '0');
 const SHOWBG    = q.get('bg') === '1';
 const CELL      = num('cell', 1);          // grid square size in obj units
-const HORIZON   = num('horizon', 0);       // nudge, in degrees of pitch
+const FLOOR     = num('floor', 120);       // how far the ground grid reaches
+
+// Where the stream camera stands. These start at the calibrated numbers, or at
+// whatever the URL asks for, and the editor's stream view moves them from there.
+// Saving writes them into layout.json, so a viewpoint found by eye is the one
+// the live page uses without a single query parameter to remember.
+const camTf = {
+  y:       num('camy', PLATE.camY),
+  z:       num('camz', 0),          // positive backs away from the desk
+  pitch:   num('horizon', 0),       // added to the calibrated pitch, degrees
+  scouted: false,                   // true once it has been moved by hand
+};
 
 // Seeing the pointer is the whole job in both of these.
 if (!DRAG && !EDIT) document.documentElement.classList.add('hide-cursor');
@@ -190,20 +201,22 @@ controls.enabled = DRAG;
 // at the back. Anything dropped on y=0 between those lands on the table.
 function usePlateCamera() {
   if (!q.get('fov')) camera.fov = PLATE.fov;
-  const pitch = THREE.MathUtils.degToRad(PLATE.pitch + HORIZON);
+  const pitch = THREE.MathUtils.degToRad(PLATE.pitch + camTf.pitch);
 
-  let camY = num('camy', PLATE.camY);
-  if (q.get('flush') === '1') {
+  if (q.get('flush') === '1' && !camTf.scouted) {
     // Raise the camera until the desk's front edge lands exactly on the bottom
     // of the frame, which hides the lip below it. Solved rather than nudged, so
     // it stays exact at any resolution: the bottom of frame is where the ray at
     // half the vertical fov meets the plane.
+    //
+    // The answer is handed to camTf rather than kept local, so nudging the
+    // height by hand starts from the solved number instead of throwing it away.
     const T = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-    camY = PLATE.nearZ * (T * Math.cos(pitch) - Math.sin(pitch))
-                       / (Math.cos(pitch) + T * Math.sin(pitch));
+    camTf.y = PLATE.nearZ * (T * Math.cos(pitch) - Math.sin(pitch))
+                          / (Math.cos(pitch) + T * Math.sin(pitch));
   }
 
-  camera.position.set(0, camY, 0);
+  camera.position.set(0, camTf.y, camTf.z);
   camera.rotation.set(pitch, 0, 0);
   camera.near = 0.01;
   camera.far  = 10000;
@@ -255,37 +268,54 @@ function useEditorCamera() {
   controls.update();
 }
 
-// Grid drawn on the desk top itself, clipped to the desk's real footprint, so
-// the lines stop where the wood stops instead of floating past the back edge.
+// The ground at y=0, drawn out to the horizon in every direction, with the
+// desk's own footprint marked on top of it.
+//
+// This used to stop at the edge of the desk. That made sense while the only
+// question was whether the grid landed on the wood, and it was useless for
+// every other question: a 25 by 10 patch floating in the middle of nothing
+// tells you nothing about where to stand a camera or how far back the room
+// goes. The floor runs past the desk now, and the desk is a rectangle on it.
 function buildGrid() {
   const zFront = -PLATE.nearZ;
   const zBack  = -(PLATE.nearZ + PLATE.depth);
   const halfW  = PLATE.width / 2;
+  const reach  = Math.max(FLOOR, PLATE.width, PLATE.depth * 2) / 2;
+  const first  = -Math.ceil(reach / CELL) * CELL;   // snapped so lines meet at 0
   const pts    = [];
 
-  // Lines running left to right, stepping back in depth.
-  for (let z = zFront; z >= zBack - 1e-6; z -= CELL) {
-    pts.push(-halfW, 0, z, halfW, 0, z);
-  }
-  // Lines running front to back. These are the ones that show the perspective.
-  for (let x = -halfW; x <= halfW + 1e-6; x += CELL) {
-    pts.push(x, 0, zFront, x, 0, zBack);
+  for (let v = first; v <= reach + 1e-6; v += CELL) {
+    pts.push(-reach, 0, v, reach, 0, v);   // left to right, stepping back
+    pts.push(v, 0, -reach, v, 0, reach);   // front to back, the perspective ones
   }
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  const grid = new THREE.LineSegments(
+  scene.add(new THREE.LineSegments(
     geo,
-    new THREE.LineBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.55 })
-  );
-  scene.add(grid);
+    new THREE.LineBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.28 })
+  ));
 
-  // The desk's own outline, brighter, so the front and back edges are obvious
-  // when checking the match against the plate.
+  // The two axes through the origin, brighter, because the camera stands at
+  // x=0 and losing track of the middle of the floor is easy out here.
+  const axes = new THREE.BufferGeometry();
+  axes.setAttribute('position', new THREE.Float32BufferAttribute([
+    -reach, 0, 0,  reach, 0, 0,
+    0, 0, -reach,  0, 0, reach,
+  ], 3));
+  scene.add(new THREE.LineSegments(
+    axes,
+    new THREE.LineBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.7 })
+  ));
+
+  // The desk, all four sides, so its edges stay obvious against a floor that
+  // now runs straight past them.
   const edge = new THREE.BufferGeometry();
   edge.setAttribute('position', new THREE.Float32BufferAttribute([
     -halfW, 0, zFront,  halfW, 0, zFront,
-    -halfW, 0, zBack,   halfW, 0, zBack,
+     halfW, 0, zFront,  halfW, 0, zBack,
+     halfW, 0, zBack,  -halfW, 0, zBack,
+    -halfW, 0, zBack,  -halfW, 0, zFront,
   ], 3));
   scene.add(new THREE.LineSegments(
     edge, new THREE.LineBasicMaterial({ color: 0xff3ea5 })
@@ -684,7 +714,7 @@ function startEditor() {
     if (k === 'c' || k === 'C') {
       streamView = !streamView;
       if (streamView) usePlateCamera(); else useEditorCamera();
-      note = streamView ? 'stream camera. C to go back' : '';
+      note = '';
       draw();
       return;
     }
@@ -701,7 +731,33 @@ function startEditor() {
       return;
     }
 
-    if (!sel || streamView) return;
+    // Stream view is where the shot gets judged, so it drives the camera and
+    // nothing else. Same keys as the model controls on purpose: PgUp/PgDn for
+    // height, arrows to move, Q and E to turn, R to start over.
+    if (streamView) {
+      const before = `${camTf.y},${camTf.z},${camTf.pitch}`;
+      switch (k) {
+        case 'PageUp':     camTf.y     += step(ev, 0.25); break;
+        case 'PageDown':   camTf.y      = Math.max(0, camTf.y - step(ev, 0.25)); break;
+        case 'ArrowUp':    camTf.z     -= step(ev, 0.25); break;   // toward the desk
+        case 'ArrowDown':  camTf.z     += step(ev, 0.25); break;   // back away
+        case 'q': case 'Q': camTf.pitch -= step(ev, 0.5); break;
+        case 'e': case 'E': camTf.pitch += step(ev, 0.5); break;
+        case 'r': case 'R':
+          camTf.y = PLATE.camY; camTf.z = 0; camTf.pitch = 0;
+          break;
+        default: return;
+      }
+      ev.preventDefault();
+      // Moving it by hand retires the flush solve, which would otherwise
+      // recompute the height and undo every press.
+      if (`${camTf.y},${camTf.z},${camTf.pitch}` !== before) camTf.scouted = true;
+      usePlateCamera();
+      draw();
+      return;
+    }
+
+    if (!sel) return;
 
     const t = sel.tf;
     switch (k) {
@@ -737,14 +793,22 @@ function startEditor() {
         hidden: !!e.tf.hidden,
       };
     }
-    const body = JSON.stringify({ models }, null, 2);
+    // The camera rides along with the models. Where it stands is as much a part
+    // of the shot as what is on the desk, and keeping it in the same file means
+    // there is one thing to reload rather than a query string to retype.
+    const cam = {
+      y:     +camTf.y.toFixed(4),
+      z:     +camTf.z.toFixed(4),
+      pitch: +camTf.pitch.toFixed(3),
+    };
+    const body = JSON.stringify({ models, camera: cam }, null, 2);
 
     try {
       const res = await fetch('layout.json', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      note = `saved layout.json  (${Object.keys(models).length} placed)`;
+      note = `saved layout.json  (${Object.keys(models).length} placed, camera at ${cam.y.toFixed(2)})`;
     } catch (err) {
       // Served by anything other than stage.py, so there is nothing listening
       // to write the file. Hand the text over instead of losing the work.
@@ -757,6 +821,26 @@ function startEditor() {
 
   function draw() {
     const n = placed.filter(e => e.tf).length;
+
+    if (streamView) {
+      // The numbers matter as much as the picture. This is the shot OBS gets,
+      // and S writes these three into layout.json alongside the models, so a
+      // viewpoint found by eye survives the reload.
+      hud.innerHTML =
+        `<b>STREAM CAMERA</b>\n` +
+        `height ${camTf.y.toFixed(2)}   back ${camTf.z.toFixed(2)}   ` +
+        `tilt ${(PLATE.pitch + camTf.pitch).toFixed(2)}°\n` +
+        `<i>${camTf.scouted ? 'moved from the calibrated spot' : 'calibrated to the plate'}</i>\n\n` +
+        `<i>PgUp/PgDn   up and down\n` +
+        `arrows      toward the desk / back off\n` +
+        `Q  E        tilt down / up\n` +
+        `R           back to the calibrated shot\n` +
+        `S           save it        C   back to the editor\n\n` +
+        `Shift for ten times, Alt for a tenth</i>` +
+        (note ? `\n\n<span class="ok">${note}</span>` : '');
+      return;
+    }
+
     if (!sel) {
       hud.innerHTML =
         `<b>CANDIVOX PLACEMENT</b>\n${n}/${placed.length} placed\n\n` +
@@ -850,18 +934,33 @@ async function boot() {
   let paths = [];
 
   if (PLATEMODE) {
-    usePlateCamera();
-    if (SHOWBG) showPlate();
-    if (GRID)   buildGrid();
-
-    // Saved placements. A missing file is the normal state the first time, so
-    // it must not read as an error — it just means nothing has been put down.
+    // The layout is read before the camera is placed, because the layout is
+    // where the camera's own position lives now.
+    //
+    // A missing file is the normal state the first time, so it must not read as
+    // an error. It just means nothing has been put down yet.
     try {
       const res = await fetch('layout.json', { cache: 'no-store' });
-      if (res.ok) layoutData = (await res.json()).models || {};
+      if (res.ok) {
+        const data = await res.json();
+        layoutData = data.models || {};
+        // A number in the URL beats the saved one, so a one-off experiment
+        // never has to overwrite the shot that is already working.
+        const cam = data.camera;
+        if (cam) {
+          if (!q.get('camy')    && Number.isFinite(cam.y))     camTf.y = cam.y;
+          if (!q.get('camz')    && Number.isFinite(cam.z))     camTf.z = cam.z;
+          if (!q.get('horizon') && Number.isFinite(cam.pitch)) camTf.pitch = cam.pitch;
+          camTf.scouted = true;
+        }
+      }
     } catch (e) {
       // No layout yet, or served from somewhere that has none. Start empty.
     }
+
+    usePlateCamera();
+    if (SHOWBG) showPlate();
+    if (GRID)   buildGrid();
   }
 
   // The editor needs the whole set on hand, since its entire job is deciding

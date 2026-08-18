@@ -134,6 +134,9 @@ class Handler(SimpleHTTPRequestHandler):
             data = json.loads(raw or b"{}")
             if not isinstance(data.get("models"), dict):
                 raise ValueError('expected {"models": {...}}')
+            cam = data.get("camera")
+            if cam is not None and not isinstance(cam, dict):
+                raise ValueError('"camera" must be an object if present')
 
             here = Path(__file__).parent
             target = here / "layout.json"
@@ -146,7 +149,13 @@ class Handler(SimpleHTTPRequestHandler):
                 target.replace(here / "layout.json.bak")
             tmp.replace(target)
 
-            print(f"saved layout.json ({len(data['models'])} models placed)")
+            where = ""
+            if cam:
+                where = (
+                    f", camera y={cam.get('y')} z={cam.get('z')} "
+                    f"pitch={cam.get('pitch')}"
+                )
+            print(f"saved layout.json ({len(data['models'])} models placed{where})")
             self._json({"ok": True, "count": len(data["models"])})
         except (ValueError, TypeError, OSError) as exc:
             self._json({"ok": False, "error": str(exc)}, code=400)

@@ -1,0 +1,28 @@
+{
+  "models": {
+    "models/bedroom-desk-view-television-2-stereo rack.obj": {
+      "x": 16.5919,
+      "z": -44.5581,
+      "ry": 68.6,
+      "s": 1,
+      "lift": 0,
+      "hidden": false
+    },
+    "models/bedroom-desk-view-television-11-pc-screen.obj": {
+      "x": 16.5919,
+      "z": -110.9258,
+      "ry": 88.2,
+      "s": 1,
+      "lift": 0,
+      "hidden": false
+    },
+    "models/bedroom-desk-view-television-14-television.obj": {
+      "x": -16.5919,
+      "z": -144.1096,
+      "ry": 49.6,
+      "s": 1,
+      "lift": 0,
+      "hidden": false
+    }
+  }
+}

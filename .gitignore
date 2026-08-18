@@ -6,3 +6,7 @@ __pycache__/
 # page reads it, but the rollback copy is yours alone.
 layout.json.bak
 layout.json.tmp
+
+# Scratch file for writing commit messages. PowerShell mangles a multi-line
+# message passed on the command line, so it goes through a file instead.
+.commitmsg.tmp

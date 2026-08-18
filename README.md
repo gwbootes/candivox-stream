@@ -241,8 +241,11 @@ Check it against the plate first. This draws the grid on top of the picture:
 http://localhost:8777/index.html?plate=1&grid=1&bg=1
 ```
 
-The pink lines are the front and back edges of the desk. They should sit right
-on the top and bottom of the brown. The teal lines are the squares.
+The pink rectangle is the desk. Its front and back should sit right on the top
+and bottom of the brown. The teal lines are the floor, and they run well past
+the desk in every direction, because the question is usually where to stand the
+camera rather than where the wood stops. `&floor=40` pulls them in if the wide
+view is distracting.
 
 Once it looks right, drop `&bg=1`. The background goes clear again and you put
 the plate behind it in OBS as its own image source.
@@ -290,10 +293,16 @@ squeezed into about fifteen pixels. That is what the plate says.
 | `grid` | `0` | `1` draws the grid on the desk top |
 | `bg` | `0` | `1` shows the plate behind it, for checking |
 | `cell` | `1` | Size of each square, in desk units |
-| `horizon` | `0` | Tilts the grid, in degrees. Use it to correct the match |
+| `floor` | `120` | How far the ground grid reaches, in desk units |
+| `horizon` | `0` | Tilts the camera, in degrees. Positive looks down |
 | `flush` | `0` | `1` raises the camera until the desk's front edge is exactly on the bottom of the frame, hiding the lip |
-| `camy` | `0.1825` | Camera height above the desk top, by hand. `flush` overrides it |
+| `camy` | `0.1825` | Camera height above the desk top |
+| `camz` | `0` | How far the camera stands back from its calibrated spot |
 | `edit` | `0` | `1` opens the placement editor. See Step 9. Turns `plate` and `grid` on by itself |
+
+All three camera numbers are saved in `layout.json` once you have found a shot
+you like, so you should rarely need to type them. A number in the URL beats the
+saved one, which makes it safe to try something without overwriting what works.
 
 ### Hiding the desk lip
 
@@ -363,6 +372,26 @@ Right now that file holds `screenface`, `Final-Candivox Logos`, and
 
 `C` is the one to remember. The working camera is deliberately nothing like the
 stream camera, so `C` is how you check what people will actually see.
+
+**Moving the stream camera.** These only work while `C` has you in the stream
+shot, and while you are there the models hold still so you can judge the framing
+without knocking anything over.
+
+| You do | It does |
+|---|---|
+| `PgUp` and `PgDn` | Raises and lowers the camera |
+| Arrow up and down | Moves toward the desk and backs away |
+| `Q` and `E` | Tilts down and up |
+| `R` | Back to the calibrated shot |
+| `S` | **Save** the camera along with the models |
+
+The corner panel shows the height, the distance, and the tilt as you go, and
+those three numbers get written into `layout.json` when you save. The live page
+reads them back, so the shot you find here is the shot OBS gets.
+
+The calibrated position sits almost level with the desk lip, which is where the
+plate's own camera was. It is a starting point rather than a verdict. Raise it
+until the desk reads the way you want.
 
 **Moving a model:**
 
