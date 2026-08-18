@@ -807,7 +807,10 @@ async function boot() {
     // A browser cannot list a folder, so the set is declared in manifest.json.
     // Re-run make-manifest.bat after exporting new models.
     try {
-      const res  = await fetch('models/manifest.json');
+      // no-store matters more than it looks. This file changes every time a
+      // model is added or excluded, and a cached copy silently shows the old
+      // lineup while the folder on disk says otherwise.
+      const res  = await fetch('models/manifest.json', { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       paths = data.models.map(n => 'models/' + n);
