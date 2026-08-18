@@ -424,7 +424,14 @@ function crispenTextures(root) {
 // path segment has to be encoded or the fetch 404s while the folder looks fine.
 const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
-function loadOne(path) {
+// A model can stand on the desk more than once. The second copy is named
+// "path#2", the third "path#3", and everything from the hash onward is a
+// label rather than part of the filename. Two VHS tapes are one file and two
+// sets of numbers, so nothing has to be re-exported to get another one.
+const fileOf = (p) => p.split('#')[0];
+
+function loadOne(instance) {
+  const path = fileOf(instance);
   const ext  = path.split('.').pop().toLowerCase();
   const dir  = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
   const file = path.slice(dir.length);
@@ -734,6 +741,63 @@ function startEditor() {
   const commit = () => { applyTf(sel); if (box) box.setFromObject(sel.pivot); draw(); };
   const step   = (ev, base) => base * (ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1);
 
+  // The two keys that can throw work away are the two that get taken back.
+  // Nudging is its own undo, so it stays out of here and the stack keeps only
+  // the moves you would actually want to reverse.
+  const undos = [];
+  function remember(kind, e) {
+    undos.push({ kind, e, tf: { ...e.tf } });
+    if (undos.length > 40) undos.shift();
+  }
+
+  // Stand another one of these on the desk. The mesh is shared rather than
+  // fetched again, so a fourth tape costs nothing but a name and five numbers.
+  function duplicate(src) {
+    const base = fileOf(src.path);
+    let n = 2;
+    while (placed.some(e => e.path === `${base}#${n}`)) n++;
+    const path = `${base}#${n}`;
+
+    const pivot = src.pivot.clone(true);
+    pivot.traverse(o => { o.userData.path = path; });
+
+    const e = {
+      path,
+      pivot,
+      size: src.size.clone(),
+      baseScale: src.baseScale,
+      tf: { ...(src.tf || defaultTf()) },
+    };
+    // Set it down beside the original rather than inside it, or the copy hides
+    // in the thing it came from and the key looks like it did nothing.
+    e.tf.x += Math.max(0.25, src.size.x * e.tf.s * 0.9);
+
+    scene.add(pivot);
+    placed.push(e);
+    applyTf(e);
+    return e;
+  }
+
+  // Copies can go away again. Originals cannot: the manifest would just load
+  // one back on the next reload, and V already hides them from the live page.
+  function drop(e) {
+    scene.remove(e.pivot);
+    const i = placed.indexOf(e);
+    if (i >= 0) placed.splice(i, 1);
+    const j = pivots.indexOf(e.pivot);
+    if (j >= 0) pivots.splice(j, 1);
+  }
+
+  function resetCamera() {
+    if (streamView) {
+      camTf.x = 0; camTf.y = PLATE.camY; camTf.z = 0; camTf.pitch = 0;
+      refresh();
+    } else {
+      useEditorCamera();
+      draw();
+    }
+  }
+
   // Capture phase on the window, which runs before OrbitControls' own listener
   // on the canvas. Disabling the controls from a listener that fires after
   // theirs is too late: they have already begun a rotate, and the first frames
@@ -809,6 +873,61 @@ function startEditor() {
     if (k === 'Escape') { select(null); return; }
     if (k === 's' || k === 'S') { ev.preventDefault(); save(); return; }
 
+    // R and C are neighbours, and C is the key reached for constantly, so R
+    // does the harmless thing in both hands: it puts the camera back. Throwing
+    // a model's placement away needs Shift, which no finger arrives at by
+    // accident on its way somewhere else.
+    if (k === 'r' || k === 'R') {
+      ev.preventDefault();
+      if (ev.shiftKey && sel) {
+        remember('tf', sel);
+        sel.tf = { ...defaultTf(), hidden: false };
+        note = 'placement reset. Ctrl+Z puts it back.';
+        commit();
+      } else {
+        resetCamera();
+      }
+      return;
+    }
+
+    if ((k === 'z' || k === 'Z') && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault();
+      const u = undos.pop();
+      if (!u) { note = 'nothing to undo'; draw(); return; }
+      if (u.kind === 'gone') { scene.add(u.e.pivot); placed.push(u.e); }
+      u.e.tf = u.tf;
+      applyTf(u.e);
+      select(u.e);
+      note = 'undone';
+      draw();
+      return;
+    }
+
+    if ((k === 'd' || k === 'D') && sel) {
+      ev.preventDefault();
+      const copy = duplicate(sel);
+      select(copy);
+      note = `copy made. ${placed.filter(e => fileOf(e.path) === fileOf(copy.path)).length} of these now.`;
+      draw();
+      return;
+    }
+
+    if ((k === 'Delete' || k === 'Backspace') && sel) {
+      ev.preventDefault();
+      if (!sel.path.includes('#')) {
+        note = 'that is the original, and the manifest would load it back. V hides it from the live page instead.';
+        draw();
+        return;
+      }
+      const gone = sel, name = gone.path.replace(/^models\//, '');
+      remember('gone', gone);
+      select(null);
+      drop(gone);
+      note = `removed ${name}`;
+      draw();
+      return;
+    }
+
     // Check the real shot without leaving the editor. This is the camera OBS
     // will use, framing and all, so it is the only honest preview.
     if (k === 'c' || k === 'C') {
@@ -851,10 +970,6 @@ function startEditor() {
         case 'q': case 'Q': cam.pitch -= step(ev, g * 2); break;
         case 'e': case 'E': cam.pitch += step(ev, g * 2); break;
         case 'f': case 'F': cam.pitch = streamView ? -PLATE.pitch : 0; break;
-        case 'r': case 'R':
-          if (streamView) { camTf.x = 0; camTf.y = PLATE.camY; camTf.z = 0; camTf.pitch = 0; }
-          else useEditorCamera();
-          break;
         default: return;
       }
       ev.preventDefault();
@@ -876,7 +991,6 @@ function startEditor() {
       case 'PageDown': t.lift -= step(ev, 0.05); break;
       case 'f': case 'F': t.lift = 0; break;
       case 'v': case 'V': t.hidden = !t.hidden; break;
-      case 'r': case 'R': sel.tf = { ...defaultTf(), hidden: false }; break;
       default: return;
     }
     ev.preventDefault();
@@ -949,7 +1063,7 @@ function startEditor() {
         `F                  look level\n` +
         `R                  ${streamView ? 'back to the calibrated shot' : 'see everything again'}\n` +
         `C                  ${streamView ? 'back to the work camera' : 'jump to the real stream shot'}\n` +
-        `S                  save</i>` +
+        `S                  save   Ctrl+Z  undo</i>` +
         (note ? `\n\n<span class="ok">${note}</span>` : '');
       return;
     }
@@ -963,9 +1077,11 @@ function startEditor() {
       `Q  E      turn        arrows  nudge\n` +
       `PgUp/Dn   lift        F       back down to the desk\n` +
       `V         hide from the live page\n` +
-      `R         start this one over    Tab  next\n` +
+      `D         stand another one of these on the desk\n` +
+      `Del       remove a copy   Shift+R  start this one over\n` +
+      `R         see everything again    Tab  next\n` +
       `Z         fly to it   C   real stream shot\n` +
-      `S         save layout.json</i>` +
+      `S         save layout.json   Ctrl+Z  undo</i>` +
       (note ? `\n\n<span class="ok">${note}</span>` : '');
   }
 
@@ -1082,6 +1198,15 @@ async function boot() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       paths = data.models.map(n => 'models/' + n);
+
+      // The manifest lists files, and a second copy of a model is not a new
+      // file, so extra copies will never appear there. They are declared by
+      // the saved layout instead: anything it names that is a copy of a model
+      // already listed gets loaded too. That is what brings duplicates back
+      // after a reload without anything being exported or edited by hand.
+      for (const key of Object.keys(layoutData)) {
+        if (!paths.includes(key) && paths.includes(fileOf(key))) paths.push(key);
+      }
     } catch (e) {
       fail(`Could not read models/manifest.json\n${e.message}\n\nRun make-manifest.bat, then reload.`);
       return;

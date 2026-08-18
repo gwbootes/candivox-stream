@@ -386,6 +386,11 @@ and there is no mode to switch.
 | `Z` | Flies to the model you last had selected |
 | `C` | Jumps to the real stream shot. Press again to come back |
 
+`R` does the same harmless thing whether or not you are holding a model, because
+it sits right next to `C` and `C` is the one you reach for all evening. The key
+that throws a placement away is `Shift`+`R`, which no finger arrives at on its
+way somewhere else.
+
 The camera stands on the floor and faces front. It will not swing around the
 side and it will not roll over, on purpose: the stream camera cannot do those
 things either, and a shot judged through a camera that can is a shot you cannot
@@ -431,13 +436,28 @@ where the plate's own camera was. Treat it as a starting point.
 | `PgUp` and `PgDn` | Floats it above the desk |
 | `F` | Drops it back onto the desk |
 | `V` | Hides it from the live page |
-| `R` | Starts that one over |
+| `D` | Stands another one of these on the desk |
+| `Del` | Removes a copy |
+| `Shift`+`R` | Starts that one over |
 | `Tab` | Next model |
 | `Esc` | Put it down, and take the camera back |
+| `Ctrl`+`Z` | Undo |
 | `S` | **Save** |
 
 Hold **Shift** with any key to move ten times as far. Hold **Alt** to move a tenth
 as far, for the fiddly last bit. That works on the camera too.
+
+**Two of something.** `D` copies whatever you are holding and sets the copy down
+beside it, already at the same size and turn. Three VHS tapes on the shelf is one
+model file and three sets of numbers, so nothing has to go back through
+MagicaVoxel to get another one. Copies are named `vhs tape.obj#2`, `#3` and so on
+in `layout.json`, and the page loads them back from there on its own. `Del`
+removes a copy. It will not remove an original, since the manifest would just
+load that one back on the next reload, and `V` already takes it off the live page.
+
+`Ctrl`+`Z` takes back the two moves that can cost you work: `Shift`+`R` and `Del`.
+Nudging is its own undo, so it stays off the stack and the last thing you actually
+wanted to reverse is still the thing waiting there.
 
 The panel in the corner always shows the numbers for whatever you are holding,
 so it also tells you at a glance which one the keys are pointed at.
