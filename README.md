@@ -233,6 +233,67 @@ to feel three-dimensional without stealing attention from you.
 
 ---
 
+## Step 8. The perspective grid that matches the desk plate
+
+Check it against the plate first. This draws the grid on top of the picture:
+
+```
+http://localhost:8777/index.html?plate=1&grid=1&bg=1
+```
+
+The pink lines are the front and back edges of the desk. They should sit right
+on the top and bottom of the brown. The teal lines are the squares.
+
+Once it looks right, drop `&bg=1`. The background goes clear again and you put
+the plate behind it in OBS as its own image source.
+
+### Where the numbers came from
+
+Nothing here was eyeballed. Both edges of the brown were measured across 47
+columns of the actual file, to less than a tenth of a pixel:
+
+| Edge | Fitted line | Error |
+|---|---|---|
+| Back of desk | `y = 0.000625x + 822.558` | 0.085 px |
+| Front of desk | `y = 0.005344x + 1031.808` | 0.070 px |
+
+Those two lines are straight, and they are **not parallel**. So they cross, far
+off the left of the frame, and that crossing point is the vanishing point. It
+puts the horizon at `y = 794.84`.
+
+That is **below** the middle of the frame, which means the plate's camera is
+tilted slightly **up**, not down. The camera sits almost level with the desk
+top and looks across it.
+
+The desk `.obj` is 10.0 units deep, and that fixes the rest. The grid now
+projects onto `y = 1032.00` and `y = 823.00`, against measured `1031.81` and
+`822.56`.
+
+### If it looks wrong
+
+Everything above rests on one delicate number: the two edges differ in angle by
+only 0.27 degrees. The measurement is solid, and it is still a small number.
+
+If the plate was ever resized, or if that brown was drawn by hand instead of
+rendered, the answer changes. **Look at it before you trust it.**
+
+Add `&horizon=3` to tilt the grid down, or `&horizon=-3` to tilt it up, until
+it sits on the wood. Tell me the number that worked and I will bake it in.
+
+One thing that will look odd and is correct: the squares bunch up badly toward
+the back. The camera is nearly level with the desk, so the far half of it is
+squeezed into about fifteen pixels. That is what the plate says.
+
+| Setting | Normal | What it does |
+|---|---|---|
+| `plate` | `0` | `1` puts the camera exactly where the plate's camera was |
+| `grid` | `0` | `1` draws the grid on the desk top |
+| `bg` | `0` | `1` shows the plate behind it, for checking |
+| `cell` | `1` | Size of each square, in desk units |
+| `horizon` | `0` | Tilts the grid, in degrees. Use it to correct the match |
+
+---
+
 ## Settings you can change
 
 You only need one copy of this page. The settings go in the web address, after the `?`.

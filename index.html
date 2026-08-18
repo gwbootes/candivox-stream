@@ -97,6 +97,39 @@ const SWING    = PARALLAX ? PARA : (SWAYING ? SWAY : 0);
 
 if (!DRAG) document.documentElement.classList.add('hide-cursor');
 
+// ---------------------------------------------------------------------------
+// PLATE CALIBRATION - bedroom-desk-v1.png, 1920x1080
+//
+// Solved from the plate itself rather than guessed. Both edges of the desk top
+// were measured to sub-pixel precision across 47 columns and fitted:
+//
+//   far edge   y = 0.000625x + 822.558   (rms 0.085 px)
+//   near edge  y = 0.005344x + 1031.808  (rms 0.070 px)
+//
+// They are straight, and they are NOT parallel, so they meet at a vanishing
+// point. That puts the horizon at y = 794.84, which is BELOW the middle of the
+// frame, meaning the plate's camera is tilted UP rather than down. Everything
+// below follows from that plus the desk model being 10.0 units deep.
+//
+// The fov is an assumption. Change it and camY/nearZ change with it, but the
+// projection stays identical, so the grid still lands on the same pixels.
+// ---------------------------------------------------------------------------
+const PLATE = {
+  fov:      35,        // vertical, degrees
+  pitch:    8.4635,    // degrees, positive tilts the camera UP
+  camY:     0.1825,    // camera height above the desk top, obj units
+  nearZ:    1.3743,    // ground distance from camera to the desk's front edge
+  depth:    10.0,      // desk front-to-back, from the desk .obj bounding box
+  width:    25.6,      // desk left-to-right, same source
+  image:   'plates/bedroom-desk-v1.png',
+};
+
+const PLATEMODE = q.get('plate') === '1';
+const GRID      = q.get('grid') === '1';
+const SHOWBG    = q.get('bg') === '1';
+const CELL      = num('cell', 1);          // grid square size in obj units
+const HORIZON   = num('horizon', 0);       // nudge, in degrees of pitch
+
 const fail = (msg) => {
   const el = document.getElementById('err');
   el.textContent = msg;
@@ -127,6 +160,71 @@ scene.add(key, fill);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enabled = DRAG;
+
+// Sit the camera exactly where the plate's camera was. Ground plane y=0 is the
+// desk top, and the desk runs from z=-nearZ at the front to z=-(nearZ+depth)
+// at the back. Anything dropped on y=0 between those lands on the table.
+function usePlateCamera() {
+  if (!q.get('fov')) camera.fov = PLATE.fov;
+  camera.position.set(0, PLATE.camY, 0);
+  camera.rotation.set(THREE.MathUtils.degToRad(PLATE.pitch + HORIZON), 0, 0);
+  camera.near = 0.01;
+  camera.far  = 10000;
+  camera.updateProjectionMatrix();
+  controls.enabled = false;   // orbiting would throw away the match
+}
+
+// Grid drawn on the desk top itself, clipped to the desk's real footprint, so
+// the lines stop where the wood stops instead of floating past the back edge.
+function buildGrid() {
+  const zFront = -PLATE.nearZ;
+  const zBack  = -(PLATE.nearZ + PLATE.depth);
+  const halfW  = PLATE.width / 2;
+  const pts    = [];
+
+  // Lines running left to right, stepping back in depth.
+  for (let z = zFront; z >= zBack - 1e-6; z -= CELL) {
+    pts.push(-halfW, 0, z, halfW, 0, z);
+  }
+  // Lines running front to back. These are the ones that show the perspective.
+  for (let x = -halfW; x <= halfW + 1e-6; x += CELL) {
+    pts.push(x, 0, zFront, x, 0, zBack);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const grid = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.55 })
+  );
+  scene.add(grid);
+
+  // The desk's own outline, brighter, so the front and back edges are obvious
+  // when checking the match against the plate.
+  const edge = new THREE.BufferGeometry();
+  edge.setAttribute('position', new THREE.Float32BufferAttribute([
+    -halfW, 0, zFront,  halfW, 0, zFront,
+    -halfW, 0, zBack,   halfW, 0, zBack,
+  ], 3));
+  scene.add(new THREE.LineSegments(
+    edge, new THREE.LineBasicMaterial({ color: 0xff3ea5 })
+  ));
+}
+
+// The plate itself, behind everything, for checking the grid lands on the wood.
+// Drawn as a second scene so no camera move or fov change can shift it.
+let bgScene = null, bgCam = null;
+function showPlate() {
+  bgCam   = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  bgScene = new THREE.Scene();
+  new THREE.TextureLoader().load(PLATE.image, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    bgScene.add(new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.MeshBasicMaterial({ map: tex, depthTest: false, depthWrite: false })
+    ));
+  });
+}
 
 const pivots = [];   // one per model; each spins about its own middle
 
@@ -246,6 +344,16 @@ function layout(entries) {
     pivots.push(entries[i].pivot);
   }
 
+  // Plate mode has a camera it must not move, so the models come to the camera
+  // instead. They get stood on the desk surface rather than centred on it.
+  if (PLATEMODE) {
+    for (const e of entries) {
+      e.pivot.position.y = e.size.y / 2;
+      e.pivot.position.z = -(PLATE.nearZ + PLATE.depth / 2);
+    }
+    return;
+  }
+
   fitW      = total || 1;
   fitH      = Math.max(...entries.map(e => e.size.y)) || 1;
   basePitch = THREE.MathUtils.degToRad(PITCH);
@@ -302,6 +410,12 @@ function placeCamera() {
 async function boot() {
   let paths = [];
 
+  if (PLATEMODE) {
+    usePlateCamera();
+    if (SHOWBG) showPlate();
+    if (GRID)   buildGrid();
+  }
+
   if (q.get('gallery') === '1') {
     // A browser cannot list a folder, so the set is declared in manifest.json.
     // Re-run make-manifest.bat after exporting new models.
@@ -318,6 +432,10 @@ async function boot() {
     paths = q.get('models').split(',').map(s => s.trim()).filter(Boolean);
   } else if (q.get('model')) {
     paths = [q.get('model')];
+  } else if (PLATEMODE) {
+    // Checking the grid against the plate is a legitimate reason to load
+    // nothing at all, so this is not an error.
+    return;
   } else {
     fail('No model given.\n\nOne model:  ?model=models/yourfile.obj\nAll of them: ?gallery=1');
     return;
@@ -383,7 +501,9 @@ renderer.setAnimationLoop((now) => {
   const step = THREE.MathUtils.degToRad(SPIN) * dt;
   for (const p of pivots) p.rotation.y += step;
 
-  if (DRAG) {
+  if (PLATEMODE) {
+    // The camera is calibrated to the plate. Nothing gets to move it.
+  } else if (DRAG) {
     controls.update();
   } else if (PARALLAX && framed) {
     // Exponential smoothing keyed off elapsed time, so the lean feels the same
@@ -403,7 +523,17 @@ renderer.setAnimationLoop((now) => {
     placeCamera();
   }
 
-  renderer.render(scene, camera);
+  if (bgScene) {
+    // Plate first, models over it, one clear between them so the plate is not
+    // wiped by the second pass.
+    renderer.autoClear = false;
+    renderer.clear();
+    renderer.render(bgScene, bgCam);
+    renderer.render(scene, camera);
+    renderer.autoClear = true;
+  } else {
+    renderer.render(scene, camera);
+  }
 });
 
 boot();
