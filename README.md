@@ -291,6 +291,24 @@ squeezed into about fifteen pixels. That is what the plate says.
 | `bg` | `0` | `1` shows the plate behind it, for checking |
 | `cell` | `1` | Size of each square, in desk units |
 | `horizon` | `0` | Tilts the grid, in degrees. Use it to correct the match |
+| `flush` | `0` | `1` raises the camera until the desk's front edge is exactly on the bottom of the frame, hiding the lip |
+| `camy` | `0.1825` | Camera height above the desk top, by hand. `flush` overrides it |
+
+### Hiding the desk lip
+
+```
+http://localhost:8777/index.html?plate=1&grid=1&flush=1
+```
+
+`flush=1` works out the camera height for you rather than guessing at it, so
+it stays exact whatever size the OBS source is.
+
+It raises the camera about 20 percent, from `0.1825` to `0.2186`. The desk top
+grows from 209 pixels to 251, and the back edge barely moves, from `823` to
+`829`. The dark lip goes off the bottom of the screen entirely.
+
+This no longer matches the plate picture, on purpose. It is a different shot.
+When you rebuild the desk in 3D, build it to this camera.
 
 ---
 

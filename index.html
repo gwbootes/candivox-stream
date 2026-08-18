@@ -166,8 +166,21 @@ controls.enabled = DRAG;
 // at the back. Anything dropped on y=0 between those lands on the table.
 function usePlateCamera() {
   if (!q.get('fov')) camera.fov = PLATE.fov;
-  camera.position.set(0, PLATE.camY, 0);
-  camera.rotation.set(THREE.MathUtils.degToRad(PLATE.pitch + HORIZON), 0, 0);
+  const pitch = THREE.MathUtils.degToRad(PLATE.pitch + HORIZON);
+
+  let camY = num('camy', PLATE.camY);
+  if (q.get('flush') === '1') {
+    // Raise the camera until the desk's front edge lands exactly on the bottom
+    // of the frame, which hides the lip below it. Solved rather than nudged, so
+    // it stays exact at any resolution: the bottom of frame is where the ray at
+    // half the vertical fov meets the plane.
+    const T = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    camY = PLATE.nearZ * (T * Math.cos(pitch) - Math.sin(pitch))
+                       / (Math.cos(pitch) + T * Math.sin(pitch));
+  }
+
+  camera.position.set(0, camY, 0);
+  camera.rotation.set(pitch, 0, 0);
   camera.near = 0.01;
   camera.far  = 10000;
   camera.updateProjectionMatrix();
